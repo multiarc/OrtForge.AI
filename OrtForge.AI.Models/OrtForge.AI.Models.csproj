@@ -1,0 +1,21 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <TargetFramework>net8.0</TargetFramework>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <PackageReference Include="CommandLineParser" Version="2.9.1" />
+        <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.22.1-dev-20250807-0700-89746dc19a" />
+        <PackageReference Include="Microsoft.ML.OnnxRuntime.ROCm" Version="1.22.1-dev-20250807-0700-89746dc19a" />
+        <PackageReference Include="Microsoft.ML.Tokenizers" Version="2.0.0-preview.25373.1" />
+        <PackageReference Include="Npgsql" Version="9.0.3" />
+        <PackageReference Include="Microsoft.Extensions.Configuration" Version="9.0.6" />
+        <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="9.0.6" />
+        <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="9.0.6" />
+        <PackageReference Include="Microsoft.Extensions.Hosting" Version="9.0.6" />
+    </ItemGroup>
+
+</Project>
