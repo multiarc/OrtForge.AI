@@ -1,5 +1,4 @@
-﻿
-Microsoft Visual Studio Solution File, Format Version 12.00
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Models", "OrtForge.AI.Models\OrtForge.AI.Models.csproj", "{14F6B553-9F76-4BFC-8617-358966566639}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.MicroBenchmarks", "OrtForge.AI.MicroBenchmarks\OrtForge.AI.MicroBenchmarks.csproj", "{3BC0C165-D16A-4C88-A9F4-C50C0ABBDA07}"
@@ -7,12 +6,6 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.UnitTests", "OrtForge.AI.UnitTests\OrtForge.AI.UnitTests.csproj", "{434E9C27-B179-4809-B6EE-8D12694A299C}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.PgSql", "OrtForge.PgSql\OrtForge.PgSql.csproj", "{EC7E16B2-1009-49CE-AD6D-6F929118FCFC}"
-EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{75734902-F12C-4CEC-AD60-0B60CE9B110B}"
-	ProjectSection(SolutionItems) = preProject
-		docs\INSTALL.md = docs\INSTALL.md
-		README.md = README.md
-	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
