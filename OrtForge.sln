@@ -1,5 +1,4 @@
-﻿
-Microsoft Visual Studio Solution File, Format Version 12.00
+﻿Microsoft Visual Studio Solution File, Format Version 12.00
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Models", "OrtForge.AI.Models\OrtForge.AI.Models.csproj", "{14F6B553-9F76-4BFC-8617-358966566639}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.MicroBenchmarks", "OrtForge.AI.MicroBenchmarks\OrtForge.AI.MicroBenchmarks.csproj", "{3BC0C165-D16A-4C88-A9F4-C50C0ABBDA07}"
