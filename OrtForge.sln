@@ -7,6 +7,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.UnitTests", "Or
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.PgSql", "OrtForge.PgSql\OrtForge.PgSql.csproj", "{EC7E16B2-1009-49CE-AD6D-6F929118FCFC}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Models.Astractions", "OrtForge.AI.Models.Astractions\OrtForge.AI.Models.Astractions.csproj", "{40A4313C-6826-4E8D-9A01-DA760DE4CE26}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Runtime.ROCm", "OrtForge.AI.Runtime.ROCm\OrtForge.AI.Runtime.ROCm.csproj", "{8FF1CB84-3A1F-425A-8E9D-45EF01092236}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -29,5 +33,13 @@ Global
 		{EC7E16B2-1009-49CE-AD6D-6F929118FCFC}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{EC7E16B2-1009-49CE-AD6D-6F929118FCFC}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{EC7E16B2-1009-49CE-AD6D-6F929118FCFC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{40A4313C-6826-4E8D-9A01-DA760DE4CE26}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{40A4313C-6826-4E8D-9A01-DA760DE4CE26}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{40A4313C-6826-4E8D-9A01-DA760DE4CE26}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{40A4313C-6826-4E8D-9A01-DA760DE4CE26}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8FF1CB84-3A1F-425A-8E9D-45EF01092236}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8FF1CB84-3A1F-425A-8E9D-45EF01092236}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8FF1CB84-3A1F-425A-8E9D-45EF01092236}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8FF1CB84-3A1F-425A-8E9D-45EF01092236}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

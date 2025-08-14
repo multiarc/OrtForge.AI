@@ -1,4 +1,6 @@
+using Microsoft.ML.OnnxRuntime.Tensors;
 using OrtForge.AI.Models.Models;
+using OrtForge.AI.Models.Options;
 
 namespace OrtForge.AI.UnitTests;
 
@@ -6,8 +8,15 @@ public class RerankerTests : IAsyncLifetime
 {
     private readonly BgeRerankerM3 _model;
     
-    public RerankerTests() {
-        _model = new BgeRerankerM3("../../../../reranker_m3_onnx_gpu/sentencepiece.bpe.model", "../../../../reranker_m3_onnx_gpu/model.onnx");
+    public RerankerTests()
+    {
+        _model = new BgeRerankerM3(new BgeM3Options
+        {
+            TokenizerModelPath = "../../../../reranker_m3_onnx_gpu/sentencepiece.bpe.model",
+            ModelPath = "../../../../reranker_m3_onnx_gpu/model.onnx",
+            TensorElementType = TensorElementType.Float16
+        });
+        _model.Initialize();
     }
     
     [Fact]

@@ -40,6 +40,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\OrtForge.AI.Models\OrtForge.AI.Models.csproj" />
+      <ProjectReference Include="..\OrtForge.AI.Runtime.ROCm\OrtForge.AI.Runtime.ROCm.csproj" />
     </ItemGroup>
 
 </Project>

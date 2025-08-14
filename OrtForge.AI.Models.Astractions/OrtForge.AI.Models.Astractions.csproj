@@ -4,15 +4,11 @@
         <TargetFramework>net8.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <RootNamespace>OrtForge.AI.PgSql</RootNamespace>
     </PropertyGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\OrtForge.AI.Models\OrtForge.AI.Models.csproj" />
-    </ItemGroup>
-
-    <ItemGroup>
-      <PackageReference Include="Npgsql" Version="9.0.3" />
+        <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.22.1-dev-20250807-0700-89746dc19a" />
+        <PackageReference Include="Microsoft.ML.Tokenizers" Version="2.0.0-preview.25373.1" />
     </ItemGroup>
 
 </Project>

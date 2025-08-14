@@ -1,5 +1,7 @@
 using System.Numerics.Tensors;
+using Microsoft.ML.OnnxRuntime.Tensors;
 using OrtForge.AI.Models.Models;
+using OrtForge.AI.Models.Options;
 
 namespace OrtForge.AI.UnitTests;
 
@@ -7,7 +9,13 @@ public class EmbeddingGenerationTests
 {
     [Fact]
     public async Task TestEmbeddingGeneration() {
-        var model = new BgeM3Model("../../../../bge_m3_onnx_gpu/sentencepiece.bpe.model", "../../../../bge_m3_onnx_gpu/model.onnx");
+        var model = new BgeM3Model(new BgeM3Options
+        {
+            TokenizerModelPath = "../../../../bge_m3_onnx_gpu/sentencepiece.bpe.model", 
+            ModelPath = "../../../../bge_m3_onnx_gpu/model.onnx",
+            TensorElementType = TensorElementType.Float16
+        });
+        model.Initialize();
         var generalSearch = "physics";
         var directSearchWithMissingContext = "Data Science and Analytics definition with explanation";
         var contextOnlySearch =
