@@ -1,4 +1,4 @@
-﻿namespace OrtForge.AI.Models.Models;
+﻿namespace OrtForge.AI.Models.Astractions;
 
 /// <summary>
 /// Model information structure
@@ -7,6 +7,6 @@ public class ModelInfo
 {
     public string ModelPath { get; set; } = string.Empty;
     public int MaxLength { get; set; }
-    public string[] InputNames { get; set; } = [];
-    public string[] OutputNames { get; set; } = [];
+    public string[]? InputNames { get; set; } = [];
+    public string[]? OutputNames { get; set; } = [];
 }
