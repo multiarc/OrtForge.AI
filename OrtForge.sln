@@ -7,6 +7,11 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.UnitTests", "Or
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.PgSql", "OrtForge.PgSql\OrtForge.PgSql.csproj", "{EC7E16B2-1009-49CE-AD6D-6F929118FCFC}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{63CDC6A4-3C2D-499F-B3F9-6B75D40887E1}"
+	ProjectSection(SolutionItems) = preProject
+		docs\INSTALL_AMD_ROCm.md = docs\INSTALL_AMD_ROCm.md
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
