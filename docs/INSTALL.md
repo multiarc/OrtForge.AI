@@ -7,9 +7,17 @@ mkdir optimum
 cd optimum
 python3 -m venv .
 source ./bin/activate
-pip install optimum
-pip install optimum[exporters,onnxruntime,sentence_transformers,amd]
-pip install accelerate
+pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm6.4
+pip install onnxruntime_genai onnx-ir
+#ROCm
+python3 -m onnxruntime_genai.models.builder -i . -o ./onnx_opt_i4 -p int4 -e rocm
+#CUDA
+python3 -m onnxruntime_genai.models.builder -i . -o ./onnx_opt_i4 -p int4 -e cuda 
 ```
 
-To install AMD GPU support to run models, please follow the instructions in [AMD GPU Support](INSTALL_AMD_ROCm.md) 
+To install AMD GPU support for onnx runtime to run and optimize models, please follow the instructions in [AMD GPU Support](INSTALL_AMD_ROCm.md)
+
+Optimize a model for inference on GPU using FP16 precision
+```bash
+optimum-cli export onnx --model . --dtype fp16 --task default --device cuda --optimize O4 ./onnx_fp16
+```
