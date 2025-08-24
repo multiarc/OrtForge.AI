@@ -4,11 +4,11 @@
         <TargetFramework>net8.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
+        <RootNamespace>OrtForge.AI.Runtime.ROCm</RootNamespace>
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.22.2" />
-        <PackageReference Include="Microsoft.ML.Tokenizers" Version="2.0.0-preview.25373.1" />
+        <PackageReference Include="Microsoft.ML.OnnxRuntime.ROCm" Version="1.22.2-dev-20250823-0209-5630b081cd" />
     </ItemGroup>
 
 </Project>

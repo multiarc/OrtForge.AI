@@ -11,13 +11,23 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{63CDC6A4-3C2D-499F-B3F9-6B75D40887E1}"
 	ProjectSection(SolutionItems) = preProject
 		docs\INSTALL_AMD_ROCm.md = docs\INSTALL_AMD_ROCm.md
-		docs\INSTALL.md = docs\INSTALL.md
-		docs\INSTALL_NVIDIA_CUDA.md = docs\INSTALL_NVIDIA_CUDA.md
 	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Models.Astractions", "OrtForge.AI.Models.Astractions\OrtForge.AI.Models.Astractions.csproj", "{40A4313C-6826-4E8D-9A01-DA760DE4CE26}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Runtime.ROCm", "OrtForge.AI.Runtime.ROCm\OrtForge.AI.Runtime.ROCm.csproj", "{8FF1CB84-3A1F-425A-8E9D-45EF01092236}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Runtime.ROCm.Linux", "OrtForge.AI.Runtime.ROCm.Linux\OrtForge.AI.Runtime.ROCm.Linux.csproj", "{8FF1CB84-3A1F-425A-8E9D-45EF01092236}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Files", "Solution Files", "{2683178C-EFDD-4951-B0C4-EE84EF8AFD9C}"
+	ProjectSection(SolutionItems) = preProject
+		LICENSE = LICENSE
+		NuGet.Config = NuGet.Config
+		global.json = global.json
+		README.md = README.md
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Runtime.CUDA", "OrtForge.AI.Runtime.CUDA\OrtForge.AI.Runtime.CUDA.csproj", "{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Runtime.MIGraphX.Linux", "OrtForge.AI.Runtime.MIGraphX.Linux\OrtForge.AI.Runtime.MIGraphX.Linux.csproj", "{19A43B3B-C548-47E5-A9ED-04A0A8B70C90}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -49,5 +59,13 @@ Global
 		{8FF1CB84-3A1F-425A-8E9D-45EF01092236}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8FF1CB84-3A1F-425A-8E9D-45EF01092236}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8FF1CB84-3A1F-425A-8E9D-45EF01092236}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{19A43B3B-C548-47E5-A9ED-04A0A8B70C90}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{19A43B3B-C548-47E5-A9ED-04A0A8B70C90}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{19A43B3B-C548-47E5-A9ED-04A0A8B70C90}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{19A43B3B-C548-47E5-A9ED-04A0A8B70C90}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
