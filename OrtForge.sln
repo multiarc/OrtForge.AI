@@ -11,6 +11,8 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{63CDC6A4-3C2D-499F-B3F9-6B75D40887E1}"
 	ProjectSection(SolutionItems) = preProject
 		docs\INSTALL_AMD_ROCm.md = docs\INSTALL_AMD_ROCm.md
+		docs\INSTALL.md = docs\INSTALL.md
+		docs\INSTALL_NVIDIA_CUDA.md = docs\INSTALL_NVIDIA_CUDA.md
 	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Models.Astractions", "OrtForge.AI.Models.Astractions\OrtForge.AI.Models.Astractions.csproj", "{40A4313C-6826-4E8D-9A01-DA760DE4CE26}"
