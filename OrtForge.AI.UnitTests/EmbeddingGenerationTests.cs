@@ -1,5 +1,7 @@
 using System.Numerics.Tensors;
+using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
+using OrtForge.AI.Models.Astractions;
 using OrtForge.AI.Models.Models;
 using OrtForge.AI.Models.Options;
 
@@ -16,6 +18,7 @@ public class EmbeddingGenerationTests
             TensorElementType = TensorElementType.Float16
         });
         model.Initialize();
+        //model.Initialize(optimizationLevel: GraphOptimizationLevel.ORT_DISABLE_ALL, providers: ExecutionProvider.CUDA);
         var generalSearch = "physics";
         var directSearchWithMissingContext = "Data Science and Analytics definition with explanation";
         var contextOnlySearch =

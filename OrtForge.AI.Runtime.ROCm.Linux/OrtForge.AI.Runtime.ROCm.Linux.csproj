@@ -9,6 +9,7 @@
 
     <ItemGroup>
         <PackageReference Include="Microsoft.ML.OnnxRuntime.ROCm" Version="1.22.2-dev-20250823-0209-5630b081cd" />
+        <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.22.2-dev-20250823-0209-5630b081cd" />
     </ItemGroup>
 
 </Project>

@@ -27,8 +27,6 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Files", "Solution 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Runtime.CUDA", "OrtForge.AI.Runtime.CUDA\OrtForge.AI.Runtime.CUDA.csproj", "{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Runtime.MIGraphX.Linux", "OrtForge.AI.Runtime.MIGraphX.Linux\OrtForge.AI.Runtime.MIGraphX.Linux.csproj", "{19A43B3B-C548-47E5-A9ED-04A0A8B70C90}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -63,9 +61,5 @@ Global
 		{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}.Release|Any CPU.Build.0 = Release|Any CPU
-		{19A43B3B-C548-47E5-A9ED-04A0A8B70C90}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{19A43B3B-C548-47E5-A9ED-04A0A8B70C90}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{19A43B3B-C548-47E5-A9ED-04A0A8B70C90}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{19A43B3B-C548-47E5-A9ED-04A0A8B70C90}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal
