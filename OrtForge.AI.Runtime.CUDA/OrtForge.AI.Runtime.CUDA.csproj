@@ -7,8 +7,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.22.1-dev-20250807-0700-89746dc19a" />
-        <PackageReference Include="Microsoft.ML.OnnxRuntime.ROCm" Version="1.22.1-dev-20250807-0700-89746dc19a" />
+      <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.22.1" />
     </ItemGroup>
 
 </Project>
