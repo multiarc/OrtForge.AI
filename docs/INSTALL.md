@@ -6,16 +6,26 @@ sudo apt install build-essential flex bison libssl-dev libelf-dev bc python3 pah
 mkdir optimum
 cd optimum
 python3 -m venv .
-source ./bin/activate
-pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm6.4
-pip install onnxruntime_genai onnx-ir
-#ROCm
-python3 -m onnxruntime_genai.models.builder -i . -o ./onnx_opt_i4 -p int4 -e rocm
-#CUDA
-python3 -m onnxruntime_genai.models.builder -i . -o ./onnx_opt_i4 -p int4 -e cuda 
+source ./bin/activate 
 ```
 
-To install AMD GPU support for onnx runtime to run and optimize models, please follow the instructions in [AMD GPU Support](INSTALL_AMD_ROCm.md)
+AMD GPU support for onnx runtime to run and optimize models, please follow the instructions in [AMD GPU Support](INSTALL_AMD_ROCm.md)
+
+## ROCm
+```bash
+pip install torch torchvision --index-url https://download.pytorch.org/whl/rocm6.4
+pip install onnxruntime_genai onnx-ir
+python3 -m onnxruntime_genai.models.builder -i . -o ./onnx_opt_i4 -p int4 -e rocm
+```
+
+Nvidia GPU (CUDA) support for onnx runtime to run and optimize models, please follow the instructions in [CUDA GPU Support](INSTALL_NVIDIA_CUDA.md)
+
+## CUDA
+```bash
+pip install torch torchvision
+pip install onnxruntime_genai onnx-ir onnxruntime_gpu
+python3 -m onnxruntime_genai.models.builder -i . -o ./onnx_opt_i4 -p int4 -e cuda
+```
 
 Optimize a model for inference on GPU using FP16 precision
 ```bash
