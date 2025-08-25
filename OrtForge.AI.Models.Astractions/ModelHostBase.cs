@@ -22,7 +22,7 @@ public abstract class ModelHostBase : IDisposable
     }
 
     /// <exception cref="FileNotFoundException"></exception>
-    public virtual void Initialize(ExecutionMode mode = ExecutionMode.ORT_PARALLEL, OrtLoggingLevel loggingLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_WARNING, GraphOptimizationLevel optimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL, ExecutionProvider providers = ExecutionProvider.CPU)
+    public virtual void Initialize(ExecutionMode mode = ExecutionMode.ORT_SEQUENTIAL, OrtLoggingLevel loggingLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_WARNING, GraphOptimizationLevel optimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL, ExecutionProvider providers = ExecutionProvider.CPU)
     {
         var options = CreateDefaultOptions(mode, loggingLevel, optimizationLevel, providers);
         using var file = File.OpenRead(_options.TokenizerModelPath);

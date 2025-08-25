@@ -11,10 +11,11 @@ public class EmbeddingGenerationTests
 {
     [Fact]
     public async Task TestEmbeddingGeneration() {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         var model = new BgeM3Model(new BgeM3Options
         {
-            TokenizerModelPath = "../../../../bge_m3_onnx_gpu/sentencepiece.bpe.model", 
-            ModelPath = "../../../../bge_m3_onnx_gpu/model.onnx",
+            TokenizerModelPath = Path.Combine(home, "LLM/bge_m3_onnx_gpu/sentencepiece.bpe.model"), 
+            ModelPath = Path.Combine(home, "LLM/bge_m3_onnx_gpu/model.onnx"),
             TensorElementType = TensorElementType.Float16
         });
         model.Initialize();

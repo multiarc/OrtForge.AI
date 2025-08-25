@@ -255,3 +255,4 @@ paket-files/
 **/bge_m3_onnx_gpu
 **/llama3.1_8b_onnx_gpu
 **/llama3.2_3b_onnx_gpu
+**/results
