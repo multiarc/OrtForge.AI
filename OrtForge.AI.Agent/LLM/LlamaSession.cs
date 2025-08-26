@@ -41,14 +41,25 @@ public sealed class LlamaSession : IDisposable
         if (inputs.AttentionMask != null && inputNames.Contains("attention_mask"))
             container.Add(NamedOnnxValue.CreateFromTensor("attention_mask", inputs.AttentionMask));
 
-        if (inputs.KvCache != null)
+        // Feed KV cache if provided, with normalization for common present->past naming
+        if (inputs.KvCache != null && inputs.KvCache.Count > 0)
         {
             foreach (var kv in inputs.KvCache)
             {
+                // 1) Exact match
                 if (inputNames.Contains(kv.Key))
                 {
                     container.Add(NamedOnnxValue.CreateFromTensor(kv.Key, kv.Value));
+                    continue;
                 }
+
+                // 2) Try mapping common output "present" names to input "past" names
+                var mapped = MapKvNameToInput(kv.Key, inputNames);
+                if (mapped != null)
+                {
+                    container.Add(NamedOnnxValue.CreateFromTensor(mapped, kv.Value));
+                }
+                // else: silently ignore non-matching cache entries
             }
         }
 
@@ -66,7 +77,16 @@ public sealed class LlamaSession : IDisposable
             {
                 var t = r.AsTensor<float>();
                 if (t is DenseTensor<float> dt)
+                {
                     newKv[r.Name] = dt;
+
+                    // Also store an alias for the next step if inputs expect "past_*" but outputs gave "present_*"
+                    var alias = MapKvOutputToPastAlias(r.Name);
+                    if (alias != null && !newKv.ContainsKey(alias))
+                    {
+                        newKv[alias] = dt;
+                    }
+                }
             }
         }
 
@@ -74,6 +94,47 @@ public sealed class LlamaSession : IDisposable
             throw new InvalidOperationException("Model did not return 'logits'.");
 
         return new StepOutputs(logits, newKv);
+    }
+
+    private static string? MapKvNameToInput(string outputLikeName, string[] inputNames)
+    {
+        // Try several common mappings used by Llama ONNX exports
+        // present_key_values.* -> past_key_values.*
+        if (outputLikeName.StartsWith("present_key_values", StringComparison.Ordinal))
+        {
+            var candidate = "past_" + outputLikeName.Substring("present_".Length);
+            if (inputNames.Contains(candidate)) return candidate;
+        }
+        // present.* -> past_key_values.*
+        if (outputLikeName.StartsWith("present.", StringComparison.Ordinal))
+        {
+            var candidate = "past_key_values" + outputLikeName.Substring("present".Length);
+            if (inputNames.Contains(candidate)) return candidate;
+        }
+        // Generic swap of "present"->"past"
+        if (outputLikeName.Contains("present"))
+        {
+            var candidate = outputLikeName.Replace("present", "past_key_values");
+            if (inputNames.Contains(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    private static string? MapKvOutputToPastAlias(string outputName)
+    {
+        if (outputName.StartsWith("present_key_values", StringComparison.Ordinal))
+        {
+            return "past_" + outputName.Substring("present_".Length);
+        }
+        if (outputName.StartsWith("present.", StringComparison.Ordinal))
+        {
+            return "past_key_values" + outputName.Substring("present".Length);
+        }
+        if (outputName.Contains("present"))
+        {
+            return outputName.Replace("present", "past_key_values");
+        }
+        return null;
     }
 }
 

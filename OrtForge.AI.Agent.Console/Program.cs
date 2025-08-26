@@ -13,7 +13,7 @@ internal static class Program
     {
         if (args.Length < 2)
         {
-            System.Console.WriteLine("Usage: OrtAgent.Console <llm.onnx> <tokenizer.json> [embedding.onnx]");
+            System.Console.WriteLine("Usage: OrtAgent.Console <llm.onnx> <tokenizer.json|sentencepiece.bpe.model> [embedding.onnx]");
             return;
         }
 
@@ -25,7 +25,9 @@ internal static class Program
         using var embSession = OrtRuntimeFactory.CreateSession(embPath);
         using var llama = new LlamaSession(llmSession);
         using var embed = new EmbeddingService(embSession);
-        var tok = TokenizerService.FromModelFiles(tokenizerPath);
+        var tok = tokenizerPath.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
+            ? TokenizerService.FromJson(tokenizerPath)
+            : TokenizerService.FromPretrained(tokenizerPath);
         var vec = new InMemoryVectorStore();
         var agent = new AgentOrchestrator(llama, tok, embed, vec);
 
