@@ -17,9 +17,25 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Models.Astracti
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Runtime.ROCm", "OrtForge.AI.Runtime.ROCm\OrtForge.AI.Runtime.ROCm.csproj", "{8FF1CB84-3A1F-425A-8E9D-45EF01092236}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Agent", "OrtForge.AI.Agent\OrtForge.AI.Agent.csproj", "{4687CFD9-1FBF-48FC-A5FA-C026C2634EDB}"
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Files", "Solution Files", "{2683178C-EFDD-4951-B0C4-EE84EF8AFD9C}"
+	ProjectSection(SolutionItems) = preProject
+		LICENSE = LICENSE
+		NuGet.Config = NuGet.Config
+		global.json = global.json
+		README.md = README.md
+	EndProjectSection
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Agent.Console", "OrtForge.AI.Agent.Console\OrtForge.AI.Agent.Console.csproj", "{51CD5E9B-0117-4340-B0C4-28758C35B068}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Runtime.CUDA", "OrtForge.AI.Runtime.CUDA\OrtForge.AI.Runtime.CUDA.csproj", "{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "scripts", "scripts", "{98546707-D1DC-4F7E-AA8F-2BA7CBA6F885}"
+	ProjectSection(SolutionItems) = preProject
+		run_tests.sh = run_tests.sh
+		run_tests_CUDA.sh = run_tests_CUDA.sh
+		run_tests_ROCm.sh = run_tests_ROCm.sh
+		run_benchmarks.sh = run_benchmarks.sh
+		run_benchmarks_CUDA.sh = run_benchmarks_CUDA.sh
+		run_benchmarks_ROCm.sh = run_benchmarks_ROCm.sh
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -51,13 +67,9 @@ Global
 		{8FF1CB84-3A1F-425A-8E9D-45EF01092236}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{8FF1CB84-3A1F-425A-8E9D-45EF01092236}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{8FF1CB84-3A1F-425A-8E9D-45EF01092236}.Release|Any CPU.Build.0 = Release|Any CPU
-		{4687CFD9-1FBF-48FC-A5FA-C026C2634EDB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{4687CFD9-1FBF-48FC-A5FA-C026C2634EDB}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{4687CFD9-1FBF-48FC-A5FA-C026C2634EDB}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{4687CFD9-1FBF-48FC-A5FA-C026C2634EDB}.Release|Any CPU.Build.0 = Release|Any CPU
-		{51CD5E9B-0117-4340-B0C4-28758C35B068}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{51CD5E9B-0117-4340-B0C4-28758C35B068}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{51CD5E9B-0117-4340-B0C4-28758C35B068}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{51CD5E9B-0117-4340-B0C4-28758C35B068}.Release|Any CPU.Build.0 = Release|Any CPU
+		{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

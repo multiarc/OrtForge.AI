@@ -5,5 +5,5 @@ namespace OrtForge.AI.Models.Options;
 
 public class BgeM3Options : BaseModelOptions
 {
-    public TensorElementType TensorElementType { get; set; }
+    public required TensorElementType TensorElementType { get; init; }
 }
