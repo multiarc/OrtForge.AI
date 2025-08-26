@@ -1,6 +1,3 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
@@ -12,212 +9,381 @@ public sealed class LlamaSession : IDisposable
 
     private readonly InferenceSession _session;
     private readonly KvStorageType _kvType;
+    
+    private readonly Dictionary<string, OrtValue> _kvTensorPool = new();
+    private readonly Dictionary<string, TensorElementType> _kvTensorTypes = new();
+    private readonly object _tensorLock = new object();
 
     public LlamaSession(InferenceSession session, KvStorageType kvType = KvStorageType.Float32)
     {
         _session = session;
         _kvType = kvType;
+        DetectModelQuantization();
     }
-
-    public void Dispose() => _session.Dispose();
-
-    public sealed class KvBlock
+    
+    private void DetectModelQuantization()
     {
-        public enum Kind { F32, F16, I4 }
-        public Kind Type { get; }
-        public DenseTensor<float>? F32 { get; }
-        public DenseTensor<System.Half>? F16 { get; }
-        public byte[]? I4Packed { get; }
-        public float I4Scale { get; }
-        public int[] Shape { get; }
-        private KvBlock(DenseTensor<float> f32)
+        foreach (var output in _session.OutputMetadata)
         {
-            Type = Kind.F32; F32 = f32; Shape = f32.Dimensions.ToArray();
-        }
-        private KvBlock(DenseTensor<System.Half> f16)
-        {
-            Type = Kind.F16; F16 = f16; Shape = f16.Dimensions.ToArray();
-        }
-        private KvBlock(byte[] data, float scale, int[] shape)
-        {
-            Type = Kind.I4; I4Packed = data; I4Scale = scale; Shape = shape;
-        }
-        public static KvBlock FromFloat(DenseTensor<float> src, KvStorageType t)
-        {
-            if (t == KvStorageType.Float32) return new KvBlock(src);
-            if (t == KvStorageType.Float16) return new KvBlock(CastFloatToHalf(src));
-            var packed = QuantizeInt4(src, out var scale);
-            return new KvBlock(packed, scale, src.Dimensions.ToArray());
-        }
-        public static KvBlock FromHalf(DenseTensor<System.Half> src)
-        {
-            return new KvBlock(src);
-        }
-        public Tensor<float> AsFloatTensor()
-        {
-            if (Type == Kind.F32 && F32 != null) return F32;
-            if (Type == Kind.F16 && F16 != null) return CastHalfToFloat(F16);
-            return DequantizeInt4(I4Packed!, I4Scale, Shape);
-        }
-        public Tensor<System.Half> AsHalfTensor()
-        {
-            if (Type == Kind.F16 && F16 != null) return F16;
-            if (Type == Kind.F32 && F32 != null) return CastFloatToHalf(F32);
-            var f32 = DequantizeInt4(I4Packed!, I4Scale, Shape);
-            return CastFloatToHalf((DenseTensor<float>)f32);
+            if (output.Value.ElementType == typeof(byte) || 
+                output.Value.ElementType == typeof(sbyte) || 
+                output.Value.ElementType.Name == "Int4")
+            {
+                Console.WriteLine($"Detected quantized model output: {output.Key} with type {output.Value.ElementType}");
+            }
         }
     }
 
-    public sealed class KvState
+    public void Dispose()
     {
-        public readonly Dictionary<string, KvBlock> Blocks = new();
+        lock (_tensorLock)
+        {
+            foreach (var tensor in _kvTensorPool.Values)
+            {
+                tensor?.Dispose();
+            }
+            _kvTensorPool.Clear();
+            _kvTensorTypes.Clear();
+        }
+        _session.Dispose();
+    }
+    
+    private OrtValue GetOrCreateKvTensor(string name, long[] shape, TensorElementType elementType)
+    {
+        lock (_tensorLock)
+        {
+            if (_kvTensorPool.TryGetValue(name, out var existingTensor))
+            {
+                return existingTensor;
+            }
+            
+            var tensor = OrtValue.CreateAllocatedTensorValue(OrtAllocator.DefaultInstance, elementType, shape);
+            _kvTensorPool[name] = tensor;
+            _kvTensorTypes[name] = elementType;
+            return tensor;
+        }
+    }
+    
+    
+    private static TensorElementType GetTensorElementType(Type type)
+    {
+        if (type == typeof(float)) return TensorElementType.Float;
+        if (type == typeof(System.Half)) return TensorElementType.Float16;
+        if (type == typeof(byte)) return TensorElementType.UInt8;
+        if (type == typeof(sbyte)) return TensorElementType.Int8;
+        if (type == typeof(int)) return TensorElementType.Int32;
+        if (type == typeof(long)) return TensorElementType.Int64;
+        return TensorElementType.Float;
+    }
+    
+    private static long[] ConvertToLongArray(ReadOnlySpan<int> dimensions)
+    {
+        var result = new long[dimensions.Length];
+        for (int i = 0; i < dimensions.Length; i++)
+        {
+            result[i] = dimensions[i];
+        }
+        return result;
+    }
+    
+    private static int[] ConvertToIntArray(ReadOnlySpan<long> dimensions)
+    {
+        var result = new int[dimensions.Length];
+        for (int i = 0; i < dimensions.Length; i++)
+        {
+            result[i] = (int)dimensions[i];
+        }
+        return result;
+    }
+
+    public sealed class KvState : IDisposable
+    {
+        public readonly Dictionary<string, OrtValue> Tensors = new();
         public static KvState Empty => new();
+        private bool _disposed = false;
+        
+        public void AddTensor(string name, OrtValue tensor)
+        {
+            Tensors[name] = tensor;
+        }
+        
+        public OrtValue? GetTensor(string name)
+        {
+            return Tensors.TryGetValue(name, out var tensor) ? tensor : null;
+        }
+        
+        public void Dispose()
+        {
+            if (!_disposed)
+            {
+                foreach (var tensor in Tensors.Values)
+                {
+                    tensor?.Dispose();
+                }
+                Tensors.Clear();
+                _disposed = true;
+            }
+        }
     }
 
     public sealed record StepInputs(
-        DenseTensor<int> InputIds,
+        OrtValue InputIds,
         KvState Kv,
-        DenseTensor<long>? PositionIds,
-        DenseTensor<int>? AttentionMask);
-
-    public sealed record StepOutputs(
-        DenseTensor<float> Logits,
-        KvState KvCache);
-
-    public StepOutputs RunStep(StepInputs inputs)
+        OrtValue? PositionIds,
+        OrtValue? AttentionMask) : IDisposable
     {
-        var inputNames = _session.InputMetadata.Keys.ToArray();
-        var container = new List<NamedOnnxValue>();
-        if (!inputNames.Contains("input_ids"))
-            throw new InvalidOperationException("Model expects 'input_ids'.");
-        var idsMeta = _session.InputMetadata["input_ids"];
-        if (idsMeta.ElementType == typeof(long))
+        public void Dispose()
         {
-            var cast = CastIntToLong(inputs.InputIds);
-            container.Add(NamedOnnxValue.CreateFromTensor("input_ids", cast));
+            InputIds?.Dispose();
+            PositionIds?.Dispose();
+            AttentionMask?.Dispose();
         }
-        else
+        
+        public static StepInputs Create(
+            DenseTensor<int> inputIds,
+            KvState kv,
+            DenseTensor<long>? positionIds = null,
+            DenseTensor<int>? attentionMask = null)
         {
-            container.Add(NamedOnnxValue.CreateFromTensor("input_ids", inputs.InputIds));
+            var inputIdsOrt = OrtValue.CreateTensorValueFromMemory(
+                inputIds.Buffer.ToArray(), 
+                ConvertToLongArray(inputIds.Dimensions));
+                
+            OrtValue? positionIdsOrt = null;
+            if (positionIds != null)
+            {
+                positionIdsOrt = OrtValue.CreateTensorValueFromMemory(
+                    positionIds.Buffer.ToArray(),
+                    ConvertToLongArray(positionIds.Dimensions));
+            }
+            
+            OrtValue? attentionMaskOrt = null;
+            if (attentionMask != null)
+            {
+                attentionMaskOrt = OrtValue.CreateTensorValueFromMemory(
+                    attentionMask.Buffer.ToArray(),
+                    ConvertToLongArray(attentionMask.Dimensions));
+            }
+            
+            return new StepInputs(inputIdsOrt, kv, positionIdsOrt, attentionMaskOrt);
         }
-        if (inputs.PositionIds != null && inputNames.Contains("position_ids"))
-        {
-            var posMeta = _session.InputMetadata["position_ids"];
-            if (posMeta.ElementType == typeof(int))
-            {
-                var cast = CastLongToInt(inputs.PositionIds);
-                container.Add(NamedOnnxValue.CreateFromTensor("position_ids", cast));
-            }
-            else
-            {
-                container.Add(NamedOnnxValue.CreateFromTensor("position_ids", inputs.PositionIds));
-            }
-        }
-        if (inputs.AttentionMask != null && inputNames.Contains("attention_mask"))
-        {
-            var maskMeta = _session.InputMetadata["attention_mask"];
-            if (maskMeta.ElementType == typeof(long))
-            {
-                var cast = CastIntToLong(inputs.AttentionMask);
-                container.Add(NamedOnnxValue.CreateFromTensor("attention_mask", cast));
-            }
-            else
-            {
-                container.Add(NamedOnnxValue.CreateFromTensor("attention_mask", inputs.AttentionMask));
-            }
-        }
-        if (inputs.Kv != null && inputs.Kv.Blocks.Count > 0)
-        {
-            foreach (var kv in inputs.Kv.Blocks)
-            {
-                string? targetName = null;
-                if (inputNames.Contains(kv.Key))
-                {
-                    targetName = kv.Key;
-                }
-                else
-                {
-                    targetName = MapKvNameToInput(kv.Key, inputNames);
-                }
-                if (targetName == null) continue;
-                var meta = _session.InputMetadata[targetName];
-                if (meta.ElementType == typeof(System.Half))
-                {
-                    var halfTensor = kv.Value.AsHalfTensor();
-                    container.Add(NamedOnnxValue.CreateFromTensor(targetName, halfTensor));
-                }
-                else
-                {
-                    var floatTensor = kv.Value.AsFloatTensor();
-                    container.Add(NamedOnnxValue.CreateFromTensor(targetName, floatTensor));
-                }
-            }
-        }
-
-        using var results = _session.Run(container);
-
-        DenseTensor<float>? logits = null;
-        DenseTensor<float>? logitsLast = null;
-        var newKv = new KvState();
-        foreach (var r in results)
-        {
-            if (string.Equals(r.Name, "logits_last_token", StringComparison.OrdinalIgnoreCase))
-            {
-                logitsLast = ReadFloatTensorFromOutput(r);
-                continue;
-            }
-            if (string.Equals(r.Name, "logits", StringComparison.OrdinalIgnoreCase))
-            {
-                logits = ReadFloatTensorFromOutput(r);
-                continue;
-            }
-            var meta = _session.OutputMetadata.ContainsKey(r.Name) ? _session.OutputMetadata[r.Name] : null;
-            if (meta == null) continue;
-            KvBlock? blockCreated = null;
-            if (meta.ElementType == typeof(System.Half))
-            {
-                var tHalf = (DenseTensor<System.Half>)r.AsTensor<System.Half>();
-                if (_kvType == KvStorageType.Int4)
-                {
-                    var f32 = CastHalfToFloat(tHalf);
-                    blockCreated = KvBlock.FromFloat(f32, KvStorageType.Int4);
-                }
-                else
-                {
-                    blockCreated = KvBlock.FromHalf(tHalf);
-                }
-            }
-            else if (meta.ElementType == typeof(float))
-            {
-                var tFloat = (DenseTensor<float>)r.AsTensor<float>();
-                if (_kvType == KvStorageType.Int4)
-                {
-                    blockCreated = KvBlock.FromFloat(tFloat, KvStorageType.Int4);
-                }
-                else
-                {
-                    blockCreated = KvBlock.FromFloat(tFloat, KvStorageType.Float32);
-                }
-            }
-            if (blockCreated != null)
-            {
-                newKv.Blocks[r.Name] = blockCreated;
-                var alias = MapKvOutputToPastAlias(r.Name);
-                if (alias != null && !newKv.Blocks.ContainsKey(alias))
-                {
-                    newKv.Blocks[alias] = blockCreated;
-                }
-            }
-        }
-
-        var finalLogits = logitsLast ?? logits;
-        if (finalLogits is null)
-            throw new InvalidOperationException("Model did not return 'logits' or 'logits_last_token'.");
-
-        return new StepOutputs(finalLogits, newKv);
     }
 
-    private static string? MapKvNameToInput(string outputLikeName, string[] inputNames)
+    public sealed record StepOutputs(
+        OrtValue Logits,
+        KvState KvCache) : IDisposable
+    {
+        public void Dispose()
+        {
+            Logits?.Dispose();
+            KvCache?.Dispose();
+        }
+        
+        public Span<float> GetLogitsSpan() => Logits.GetTensorMutableDataAsSpan<float>();
+        
+        public float[] GetLogitsArray()
+        {
+            var span = GetLogitsSpan();
+            var array = new float[span.Length];
+            span.CopyTo(array);
+            return array;
+        }
+        
+        public DenseTensor<float> GetLogitsTensor()
+        {
+            var span = GetLogitsSpan();
+            var shape = Logits.GetTensorTypeAndShape().Shape;
+            var dims = ConvertToIntArray(shape);
+            var array = new float[span.Length];
+            span.CopyTo(array);
+            return new DenseTensor<float>(array, dims);
+        }
+    }
+
+    public async Task<StepOutputs> RunStepAsync(StepInputs inputs, CancellationToken cancellationToken = default)
+    {
+        var inputMetadataKeys = _session.InputMetadata.Keys;
+        var outputMetadata = _session.OutputMetadata;
+        
+        var maxInputs = 3 + (inputs.Kv?.Tensors.Count ?? 0);
+        var inputValues = new List<OrtValue>(maxInputs);
+        var inputNamesList = new List<string>(maxInputs);
+        var outputCount = outputMetadata.Count;
+        var outputNames = new List<string>(outputCount);
+        var outputValues = new List<OrtValue>(outputCount);
+
+        bool hasInputIds = false;
+        foreach (var key in inputMetadataKeys)
+        {
+            if (key == "input_ids")
+            {
+                hasInputIds = true;
+                break;
+            }
+        }
+        
+        if (!hasInputIds)
+            throw new InvalidOperationException("Model expects 'input_ids'.");
+            
+        inputValues.Add(inputs.InputIds);
+        inputNamesList.Add("input_ids");
+
+        bool hasPositionIds = false;
+        if (inputs.PositionIds != null)
+        {
+            foreach (var key in inputMetadataKeys)
+            {
+                if (key == "position_ids")
+                {
+                    hasPositionIds = true;
+                    break;
+                }
+            }
+        }
+
+        if (hasPositionIds && inputs.PositionIds != null)
+        {
+            inputValues.Add(inputs.PositionIds);
+            inputNamesList.Add("position_ids");
+        }
+
+        bool hasAttentionMask = false;
+        if (inputs.AttentionMask != null)
+        {
+            foreach (var key in inputMetadataKeys)
+            {
+                if (key == "attention_mask")
+                {
+                    hasAttentionMask = true;
+                    break;
+                }
+            }
+        }
+
+        if (hasAttentionMask && inputs.AttentionMask != null)
+        {
+            inputValues.Add(inputs.AttentionMask);
+            inputNamesList.Add("attention_mask");
+        }
+
+        if (inputs.Kv != null && inputs.Kv.Tensors.Count > 0)
+        {
+            foreach (var kv in inputs.Kv.Tensors)
+            {
+                string? targetName = null;
+                
+                foreach (var inputName in inputMetadataKeys)
+                {
+                    if (inputName == kv.Key)
+                    {
+                        targetName = kv.Key;
+                        break;
+                    }
+                }
+                
+                if (targetName == null)
+                {
+                    targetName = MapKvNameToInput(kv.Key, inputMetadataKeys);
+                }
+                
+                if (targetName == null) continue;
+
+                inputValues.Add(kv.Value);
+                inputNamesList.Add(targetName);
+            }
+        }
+
+        foreach (var output in outputMetadata)
+        {
+            outputNames.Add(output.Key);
+            if (output.Key.ToLower().Contains("logits"))
+            {
+                var longDims = ConvertToLongArray(output.Value.Dimensions);
+                var logitsTensor = OrtValue.CreateAllocatedTensorValue(OrtAllocator.DefaultInstance, TensorElementType.Float, longDims);
+                outputValues.Add(logitsTensor);
+            }
+            else
+            {
+                var longDims = ConvertToLongArray(output.Value.Dimensions);
+                var kvTensor = GetOrCreateKvTensor(output.Key, longDims, GetTensorElementType(output.Value.ElementType));
+                outputValues.Add(kvTensor);
+            }
+        }
+
+        var inputNamesArray = inputNamesList.ToArray();
+        var inputValuesArray = inputValues.ToArray();
+        var outputNamesArray = outputNames.ToArray();
+        var outputValuesArray = outputValues.ToArray();
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        try
+        {
+            using var runOptions = new RunOptions();
+            await _session.RunAsync(runOptions, inputNamesArray, inputValuesArray, outputNamesArray, outputValuesArray);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Error running the model: {ex.Message}", ex);
+        }
+
+        var newKv = new KvState();
+        OrtValue? logits = null;
+        
+        using (var disposableInputs = new DisposableOrtValueList(inputValuesArray.Where(t => !_kvTensorPool.ContainsValue(t))))
+        {
+            for (int i = 0; i < outputNamesArray.Length; i++)
+            {
+                var outputName = outputNamesArray[i];
+                var outputTensor = outputValuesArray[i];
+                
+                if (outputName.ToLower().Contains("logits"))
+                {
+                    logits = outputTensor;
+                }
+                else
+                {
+                    newKv.AddTensor(outputName, outputTensor);
+                    var alias = MapKvOutputToPastAlias(outputName);
+                    if (alias != null)
+                    {
+                        newKv.AddTensor(alias, outputTensor);
+                    }
+                }
+            }
+        }
+
+        if (logits is null)
+            throw new InvalidOperationException("Model did not return logits.");
+
+        return new StepOutputs(logits, newKv);
+    }
+    
+    public StepOutputs RunStep(StepInputs inputs)
+    {
+        return RunStepAsync(inputs, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
+    
+    private sealed class DisposableOrtValueList : IDisposable
+    {
+        private readonly IEnumerable<OrtValue> _values;
+        
+        public DisposableOrtValueList(IEnumerable<OrtValue> values)
+        {
+            _values = values;
+        }
+        
+        public void Dispose()
+        {
+            foreach (var value in _values)
+            {
+                value?.Dispose();
+            }
+        }
+    }
+
+    private static string? MapKvNameToInput(string outputLikeName, IEnumerable<string> inputNames)
     {
         if (outputLikeName.StartsWith("present_key_values", StringComparison.Ordinal))
         {
@@ -254,110 +420,8 @@ public sealed class LlamaSession : IDisposable
         return null;
     }
 
-    private static DenseTensor<long> CastIntToLong(DenseTensor<int> src)
-    {
-        var dims = src.Dimensions.ToArray();
-        var dst = new DenseTensor<long>(dims);
-        var s = src.Buffer.Span;
-        var d = dst.Buffer.Span;
-        for (int i = 0; i < s.Length; i++) d[i] = s[i];
-        return dst;
-    }
 
-    private static DenseTensor<int> CastLongToInt(DenseTensor<long> src)
-    {
-        var dims = src.Dimensions.ToArray();
-        var dst = new DenseTensor<int>(dims);
-        var s = src.Buffer.Span;
-        var d = dst.Buffer.Span;
-        for (int i = 0; i < s.Length; i++) d[i] = checked((int)s[i]);
-        return dst;
-    }
 
-    private static DenseTensor<System.Half> CastFloatToHalf(DenseTensor<float> src)
-    {
-        var dims = src.Dimensions.ToArray();
-        var dst = new DenseTensor<System.Half>(dims);
-        var s = src.Buffer.Span;
-        var d = dst.Buffer.Span;
-        for (int i = 0; i < s.Length; i++) d[i] = (System.Half)s[i];
-        return dst;
-    }
-
-    private DenseTensor<float>? ReadFloatTensorFromOutput(NamedOnnxValue r)
-    {
-        var meta = _session.OutputMetadata.ContainsKey(r.Name) ? _session.OutputMetadata[r.Name] : null;
-        if (meta != null && meta.ElementType == typeof(System.Half))
-        {
-            var tHalf = r.AsTensor<System.Half>();
-            return CastHalfToFloat(tHalf);
-        }
-        if (meta != null && meta.ElementType == typeof(float))
-        {
-            return (DenseTensor<float>)r.AsTensor<float>();
-        }
-        try { return (DenseTensor<float>)r.AsTensor<float>(); } catch { }
-        try { var th = r.AsTensor<System.Half>(); return CastHalfToFloat(th); } catch { }
-        return null;
-    }
-
-    private static DenseTensor<float> CastHalfToFloat(Tensor<System.Half> src)
-    {
-        var dims = src.Dimensions.ToArray();
-        var dst = new DenseTensor<float>(dims);
-        var d = dst.Buffer.Span;
-        int i = 0;
-        foreach (var v in src.ToArray())
-        {
-            d[i++] = (float)v;
-        }
-        return dst;
-    }
-
-    private static byte[] QuantizeInt4(DenseTensor<float> src, out float scale)
-    {
-        var s = src.Buffer.Span;
-        float maxAbs = 0f;
-        for (int i = 0; i < s.Length; i++) { var a = Math.Abs(s[i]); if (a > maxAbs) maxAbs = a; }
-        scale = maxAbs <= 0 ? 1f : maxAbs / 7f;
-        var n = s.Length;
-        var bytes = new byte[(n + 1) / 2];
-        for (int i = 0; i < n; i += 2)
-        {
-            int q0 = (int)Math.Round(s[i] / scale);
-            if (q0 < -8) q0 = -8; if (q0 > 7) q0 = 7;
-            int q1 = 0;
-            if (i + 1 < n)
-            {
-                q1 = (int)Math.Round(s[i + 1] / scale);
-                if (q1 < -8) q1 = -8; if (q1 > 7) q1 = 7;
-            }
-            byte nib0 = (byte)(q0 & 0x0F);
-            byte nib1 = (byte)(q1 & 0x0F);
-            bytes[i / 2] = (byte)(nib1 << 4 | nib0);
-        }
-        return bytes;
-    }
-
-    private static DenseTensor<float> DequantizeInt4(byte[] data, float scale, int[] shape)
-    {
-        int n = 1;
-        for (int i = 0; i < shape.Length; i++) n *= shape[i];
-        var dst = new DenseTensor<float>(shape);
-        var d = dst.Buffer.Span;
-        for (int i = 0; i < n; i += 2)
-        {
-            var b = data[i / 2];
-            int q0 = (sbyte)((b & 0x0F) << 4) >> 4;
-            d[i] = q0 * scale;
-            if (i + 1 < n)
-            {
-                int q1 = (sbyte)(b & 0xF0) >> 4;
-                d[i + 1] = q1 * scale;
-            }
-        }
-        return dst;
-    }
 }
 
 

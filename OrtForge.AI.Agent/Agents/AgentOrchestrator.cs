@@ -41,12 +41,14 @@ public sealed class AgentOrchestrator
 
         for (int step = 0; step < 2048; step++)
         {
-            var outputs = _llm.RunStep(new LlamaSession.StepInputs(idsTensor, kv, PositionIds: null, AttentionMask: null));
-            kv = outputs.KvCache;
+            using var inputs = LlamaSession.StepInputs.Create(idsTensor, kv);
+            var outputs = _llm.RunStep(inputs);
+            
+            var newKv = outputs.KvCache;
 
-            var last = outputs.Logits.Dimensions.ToArray();
-            var vocab = last[^1];
-            var span = outputs.Logits.Buffer.Span;
+            var logitsShape = outputs.Logits.GetTensorTypeAndShape().Shape;
+            var vocab = (int)logitsShape[^1];
+            var span = outputs.GetLogitsSpan();
             var logitsLast = span.Slice(span.Length - vocab, vocab);
             var nextId = Sampling.TopK(logitsLast, k: 40, temperature: 0.7);
 
@@ -66,11 +68,19 @@ public sealed class AgentOrchestrator
                 var injectIds = _tokenizer.EncodeToIds(toolInject);
                 var injectTensor = new DenseTensor<int>(new[] { 1, injectIds.Length });
                 for (int i = 0; i < injectIds.Length; i++) injectTensor[0, i] = injectIds[i];
-                outputs = _llm.RunStep(new LlamaSession.StepInputs(injectTensor, kv, null, null));
-                kv = outputs.KvCache;
+                using var injectInputs = LlamaSession.StepInputs.Create(injectTensor, newKv);
+                var injectOutputs = _llm.RunStep(injectInputs);
+                outputs.Dispose();
+                outputs = injectOutputs;
+                newKv = injectOutputs.KvCache;
             }
+            
+            kv?.Dispose();
+            kv = newKv;
+            outputs.Dispose();
         }
 
+        kv?.Dispose();
         return response.ToString();
     }
 

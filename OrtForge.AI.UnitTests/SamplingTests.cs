@@ -1,4 +1,3 @@
-using System;
 using OrtAgent.Core.Generation;
 
 namespace OrtForge.AI.UnitTests;

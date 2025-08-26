@@ -1,4 +1,3 @@
-using System;
 using Microsoft.ML.OnnxRuntime;
 
 namespace OrtAgent.Core.Runtime;
