@@ -37,6 +37,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "scripts", "scripts", "{9854
 		run_benchmarks_ROCm.sh = run_benchmarks_ROCm.sh
 	EndProjectSection
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Agent", "OrtForge.AI.Agent\OrtForge.AI.Agent.csproj", "{F9138501-F841-4BFC-9336-C54B75F5AB7D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Agent.Console", "OrtForge.AI.Agent.Console\OrtForge.AI.Agent.Console.csproj", "{46B86EBA-7720-43D3-B2ED-FEAAAF85AF07}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -71,5 +75,13 @@ Global
 		{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}.Release|Any CPU.Build.0 = Release|Any CPU
+		{F9138501-F841-4BFC-9336-C54B75F5AB7D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{F9138501-F841-4BFC-9336-C54B75F5AB7D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{F9138501-F841-4BFC-9336-C54B75F5AB7D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{F9138501-F841-4BFC-9336-C54B75F5AB7D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{46B86EBA-7720-43D3-B2ED-FEAAAF85AF07}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{46B86EBA-7720-43D3-B2ED-FEAAAF85AF07}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{46B86EBA-7720-43D3-B2ED-FEAAAF85AF07}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{46B86EBA-7720-43D3-B2ED-FEAAAF85AF07}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 EndGlobal

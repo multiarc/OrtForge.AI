@@ -38,13 +38,13 @@ public sealed class AgentOrchestrator
         var idsTensor = new DenseTensor<int>(new[] { 1, inputIds.Length });
         for (int i = 0; i < inputIds.Length; i++) idsTensor[0, i] = inputIds[i];
 
-        var kv = new Dictionary<string, Microsoft.ML.OnnxRuntime.OrtValue>();
+        var kv = new Dictionary<string, DenseTensor<float>>();
         var response = new StringBuilder();
 
         for (int step = 0; step < 2048; step++)
         {
-            var outputs = _llm.RunStep(new LlamaSession.StepInputs(idsTensor, kv, positionIds: null, attentionMask: null));
-            kv = outputs.KvCache; // carry kv-cache
+            var outputs = _llm.RunStep(new LlamaSession.StepInputs(idsTensor, kv, PositionIds: null, AttentionMask: null));
+            kv = outputs.KvCache;
 
             // select next token from last time step logits
             var last = outputs.Logits.Dimensions.ToArray(); // [B, T, V]

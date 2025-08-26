@@ -21,16 +21,16 @@ public static class Sampling
     {
         rng ??= Random.Shared;
         k = Math.Max(1, k);
-        var indices = Enumerable.Range(0, logits.Length).ToArray();
-        Array.Sort(indices, (a, b) => logits[b].CompareTo(logits[a]));
+        var logitsArr = logits.ToArray();
+        var indices = Enumerable.Range(0, logitsArr.Length).ToArray();
+        Array.Sort(indices, (a, b) => logitsArr[b].CompareTo(logitsArr[a]));
         var top = indices.Take(k).ToArray();
 
-        // softmax with temperature over top-k
         var probs = new double[top.Length];
         double sum = 0;
         for (int i = 0; i < top.Length; i++)
         {
-            var v = Math.Exp(logits[top[i]] / Math.Max(1e-6, temperature));
+            var v = Math.Exp(logitsArr[top[i]] / Math.Max(1e-6, temperature));
             probs[i] = v; sum += v;
         }
         for (int i = 0; i < probs.Length; i++) probs[i] /= sum;

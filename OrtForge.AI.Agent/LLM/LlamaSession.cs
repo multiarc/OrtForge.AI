@@ -19,25 +19,27 @@ public sealed class LlamaSession : IDisposable
 
     public sealed record StepInputs(
         DenseTensor<int> InputIds,
-        Dictionary<string, OrtValue>? KvCache,
+        Dictionary<string, DenseTensor<float>>? KvCache,
         DenseTensor<long>? PositionIds,
         DenseTensor<int>? AttentionMask);
 
     public sealed record StepOutputs(
         DenseTensor<float> Logits,
-        Dictionary<string, OrtValue> KvCache);
+        Dictionary<string, DenseTensor<float>> KvCache);
 
     public StepOutputs RunStep(StepInputs inputs)
     {
         var inputNames = _session.InputMetadata.Keys.ToArray();
         var container = new List<NamedOnnxValue>();
 
-        // Common inputs
-        if (TryBind(inputNames, "input_ids", OrtValue.CreateFromTensor(inputs.InputIds), container) == false)
+        if (!inputNames.Contains("input_ids"))
             throw new InvalidOperationException("Model expects 'input_ids'.");
+        container.Add(NamedOnnxValue.CreateFromTensor("input_ids", inputs.InputIds));
 
-        if (TryBind(inputNames, "position_ids", inputs.PositionIds is null ? null : OrtValue.CreateFromTensor(inputs.PositionIds), container)) { }
-        if (TryBind(inputNames, "attention_mask", inputs.AttentionMask is null ? null : OrtValue.CreateFromTensor(inputs.AttentionMask), container)) { }
+        if (inputs.PositionIds != null && inputNames.Contains("position_ids"))
+            container.Add(NamedOnnxValue.CreateFromTensor("position_ids", inputs.PositionIds));
+        if (inputs.AttentionMask != null && inputNames.Contains("attention_mask"))
+            container.Add(NamedOnnxValue.CreateFromTensor("attention_mask", inputs.AttentionMask));
 
         if (inputs.KvCache != null)
         {
@@ -45,7 +47,7 @@ public sealed class LlamaSession : IDisposable
             {
                 if (inputNames.Contains(kv.Key))
                 {
-                    container.Add(NamedOnnxValue.CreateFromOrtValue(kv.Key, kv.Value));
+                    container.Add(NamedOnnxValue.CreateFromTensor(kv.Key, kv.Value));
                 }
             }
         }
@@ -53,16 +55,18 @@ public sealed class LlamaSession : IDisposable
         using var results = _session.Run(container);
 
         DenseTensor<float>? logits = null;
-        var newKv = new Dictionary<string, OrtValue>();
+        var newKv = new Dictionary<string, DenseTensor<float>>();
         foreach (var r in results)
         {
             if (string.Equals(r.Name, "logits", StringComparison.OrdinalIgnoreCase))
             {
                 logits = (DenseTensor<float>)r.AsTensor<float>();
             }
-            else if (r.Value is OrtValue ov)
+            else
             {
-                newKv[r.Name] = ov; // kv-cache tensors come as OrtValue with device placement; keep reference
+                var t = r.AsTensor<float>();
+                if (t is DenseTensor<float> dt)
+                    newKv[r.Name] = dt;
             }
         }
 
@@ -70,13 +74,6 @@ public sealed class LlamaSession : IDisposable
             throw new InvalidOperationException("Model did not return 'logits'.");
 
         return new StepOutputs(logits, newKv);
-    }
-
-    private static bool TryBind(string[] inputNames, string name, OrtValue? value, List<NamedOnnxValue> dst)
-    {
-        if (!inputNames.Contains(name) || value is null) return false;
-        dst.Add(NamedOnnxValue.CreateFromOrtValue(name, value));
-        return true;
     }
 }
 
