@@ -20,6 +20,8 @@ public sealed class LlamaSession : IDisposable
         _kvType = kvType;
         DetectModelQuantization();
     }
+
+    public string ModelName { get; init; } = "default";
     
     private void DetectModelQuantization()
     {
@@ -364,6 +366,20 @@ public sealed class LlamaSession : IDisposable
         return RunStepAsync(inputs, CancellationToken.None).GetAwaiter().GetResult();
     }
 
+    public async Task<StepOutputs> RunOptimizedStepAsync(DenseTensor<int> inputIds, KvState kv, int currentStep, int sequenceLength, CancellationToken cancellationToken = default)
+    {
+        var positionIds = LlamaOptimizations.CreateOptimalPositionIds(sequenceLength, currentStep, ModelName);
+        var attentionMask = currentStep == 0 ? LlamaOptimizations.CreateOptimalAttentionMask(inputIds.Dimensions[1], ModelName) : null;
+        
+        using var inputs = StepInputs.Create(inputIds, kv, positionIds, attentionMask);
+        return await RunStepAsync(inputs, cancellationToken);
+    }
+
+    public StepOutputs RunOptimizedStep(DenseTensor<int> inputIds, KvState kv, int currentStep, int sequenceLength)
+    {
+        return RunOptimizedStepAsync(inputIds, kv, currentStep, sequenceLength, CancellationToken.None).GetAwaiter().GetResult();
+    }
+
     
     private sealed class DisposableOrtValueList : IDisposable
     {
@@ -385,21 +401,45 @@ public sealed class LlamaSession : IDisposable
 
     private static string? MapKvNameToInput(string outputLikeName, IEnumerable<string> inputNames)
     {
+        var inputNamesSet = inputNames.ToHashSet();
+        
         if (outputLikeName.StartsWith("present_key_values", StringComparison.Ordinal))
         {
             var candidate = "past_" + outputLikeName.Substring("present_".Length);
-            if (inputNames.Contains(candidate)) return candidate;
+            if (inputNamesSet.Contains(candidate)) return candidate;
         }
+        
         if (outputLikeName.StartsWith("present.", StringComparison.Ordinal))
         {
             var candidate = "past_key_values" + outputLikeName.Substring("present".Length);
-            if (inputNames.Contains(candidate)) return candidate;
+            if (inputNamesSet.Contains(candidate)) return candidate;
+            
+            candidate = "past" + outputLikeName.Substring("present".Length);
+            if (inputNamesSet.Contains(candidate)) return candidate;
         }
+        
         if (outputLikeName.Contains("present"))
         {
-            var candidate = outputLikeName.Replace("present", "past_key_values");
-            if (inputNames.Contains(candidate)) return candidate;
+            var candidate = outputLikeName.Replace("present", "past");
+            if (inputNamesSet.Contains(candidate)) return candidate;
+            
+            candidate = outputLikeName.Replace("present", "past_key_values");
+            if (inputNamesSet.Contains(candidate)) return candidate;
         }
+        
+        foreach (var inputName in inputNamesSet)
+        {
+            if (inputName.Contains("past") && outputLikeName.Contains("present"))
+            {
+                var baseName = outputLikeName.Replace("present", "").Replace("_", "").Replace(".", "");
+                var inputBaseName = inputName.Replace("past", "").Replace("_", "").Replace(".", "").Replace("key", "").Replace("values", "");
+                if (baseName.Contains(inputBaseName) || inputBaseName.Contains(baseName))
+                {
+                    return inputName;
+                }
+            }
+        }
+        
         return null;
     }
 
@@ -409,14 +449,17 @@ public sealed class LlamaSession : IDisposable
         {
             return "past_" + outputName.Substring("present_".Length);
         }
+        
         if (outputName.StartsWith("present.", StringComparison.Ordinal))
         {
-            return "past_key_values" + outputName.Substring("present".Length);
+            return "past" + outputName.Substring("present".Length);
         }
+        
         if (outputName.Contains("present"))
         {
-            return outputName.Replace("present", "past_key_values");
+            return outputName.Replace("present", "past");
         }
+        
         return null;
     }
 
