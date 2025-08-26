@@ -49,6 +49,10 @@ public sealed class LlamaSession : IDisposable
             var packed = QuantizeInt4(src, out var scale);
             return new KvBlock(packed, scale, src.Dimensions.ToArray());
         }
+        public static KvBlock FromHalf(DenseTensor<System.Half> src)
+        {
+            return new KvBlock(src);
+        }
         public Tensor<float> AsFloatTensor()
         {
             if (Type == Kind.F32 && F32 != null) return F32;
@@ -167,15 +171,41 @@ public sealed class LlamaSession : IDisposable
                 logits = ReadFloatTensorFromOutput(r);
                 continue;
             }
-            var kvFloat = ReadFloatTensorFromOutput(r);
-            if (kvFloat != null)
+            var meta = _session.OutputMetadata.ContainsKey(r.Name) ? _session.OutputMetadata[r.Name] : null;
+            if (meta == null) continue;
+            KvBlock? blockCreated = null;
+            if (meta.ElementType == typeof(System.Half))
             {
-                var block = KvBlock.FromFloat(kvFloat, _kvType);
-                newKv.Blocks[r.Name] = block;
+                var tHalf = (DenseTensor<System.Half>)r.AsTensor<System.Half>();
+                if (_kvType == KvStorageType.Int4)
+                {
+                    var f32 = CastHalfToFloat(tHalf);
+                    blockCreated = KvBlock.FromFloat(f32, KvStorageType.Int4);
+                }
+                else
+                {
+                    blockCreated = KvBlock.FromHalf(tHalf);
+                }
+            }
+            else if (meta.ElementType == typeof(float))
+            {
+                var tFloat = (DenseTensor<float>)r.AsTensor<float>();
+                if (_kvType == KvStorageType.Int4)
+                {
+                    blockCreated = KvBlock.FromFloat(tFloat, KvStorageType.Int4);
+                }
+                else
+                {
+                    blockCreated = KvBlock.FromFloat(tFloat, KvStorageType.Float32);
+                }
+            }
+            if (blockCreated != null)
+            {
+                newKv.Blocks[r.Name] = blockCreated;
                 var alias = MapKvOutputToPastAlias(r.Name);
                 if (alias != null && !newKv.Blocks.ContainsKey(alias))
                 {
-                    newKv.Blocks[alias] = block;
+                    newKv.Blocks[alias] = blockCreated;
                 }
             }
         }
