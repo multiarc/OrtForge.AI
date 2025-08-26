@@ -1,3 +1,4 @@
+#if !WINDOWS
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Engines;
 using Microsoft.ML.OnnxRuntime;
@@ -80,3 +81,4 @@ public class BgeRerankerM3ModelConcurrentBenchmarks
         return result;
     }
 }
+#endif

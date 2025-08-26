@@ -7,14 +7,47 @@
 
         <IsPackable>false</IsPackable>
         <IsTestProject>true</IsTestProject>
+<!--<DefineConstants>CUDA;ROCM</DefineConstants>-->
     </PropertyGroup>
 
+    <Choose>
+        <When Condition="'$(OS)' == 'UNIX'">
+            <PropertyGroup>
+                <DefineConstants>UNIX</DefineConstants>
+            </PropertyGroup>
+        </When>
+        <When Condition="'$(OS)' == 'WINDOWS_NT'">
+            <ItemGroup>
+                <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.22.1" />
+            </ItemGroup>
+            <PropertyGroup>
+                <DefineConstants>WINDOWS</DefineConstants>
+            </PropertyGroup>
+        </When>
+        <When Condition="$([System.Text.RegularExpressions.Regex]::IsMatch(
+         $(DefineConstants), '^(.*;)*ROCM(;.*)*$'))">
+            <ItemGroup>
+                <ProjectReference Include="..\OrtForge.AI.Runtime.ROCm.Linux\OrtForge.AI.Runtime.ROCm.Linux.csproj" />
+            </ItemGroup>
+        </When>
+        <When Condition="$([System.Text.RegularExpressions.Regex]::IsMatch(
+         $(DefineConstants), '^(.*;)*CUDA(;.*)*$'))">
+            <ItemGroup>
+                <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.22.1" />
+            </ItemGroup>
+        </When>
+        <Otherwise>
+            <ItemGroup>
+                <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.22.1" />
+            </ItemGroup>
+        </Otherwise>
+    </Choose>
+    
     <ItemGroup>
         <PackageReference Include="coverlet.collector" Version="6.0.4">
           <PrivateAssets>all</PrivateAssets>
           <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
         </PackageReference>
-        <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.22.1" />
         <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
         <PackageReference Include="xunit" Version="2.9.3" />
         <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">

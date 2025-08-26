@@ -34,7 +34,23 @@ public class BgeRerankerM3ModelBenchmarks
         GraphOptimizationLevel.ORT_ENABLE_EXTENDED, GraphOptimizationLevel.ORT_ENABLE_ALL)]
     public GraphOptimizationLevel OptimizationLevel { get; set; }
 
-    [Params(ExecutionProvider.CPU, ExecutionProvider.ROCm, ExecutionProvider.ROCm | ExecutionProvider.CPU)]
+#if WINDOWS
+    [Params(ExecutionProvider.CPU,
+#if CUDA        
+        ExecutionProvider.CUDA, ExecutionProvider.CUDA | ExecutionProvider.CPU
+#else
+        ExecutionProvider.DirectML, ExecutionProvider.DirectML | ExecutionProvider.CPU
+#endif        
+    )]
+#elif UNIX
+    [Params(ExecutionProvider.CPU, 
+#if ROCM
+        ExecutionProvider.ROCm, ExecutionProvider.ROCm | ExecutionProvider.CPU
+#elif CUDA
+        ExecutionProvider.CUDA, ExecutionProvider.CUDA | ExecutionProvider.CPU
+#endif
+    )]
+#endif
     public ExecutionProvider Providers { get; set; }
 
     [Params(ExecutionMode.ORT_PARALLEL, ExecutionMode.ORT_SEQUENTIAL)]

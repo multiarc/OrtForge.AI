@@ -19,7 +19,11 @@ public class RerankerTests : IAsyncLifetime
             ModelPath = Path.Combine(home, "LLM/reranker_m3_onnx_gpu/model.onnx"),
             TensorElementType = TensorElementType.Float16
         });
-        _model.Initialize();
+#if WINDOWS
+        _model.Initialize(providers: ExecutionProvider.DirectML | ExecutionProvider.CPU);
+#elif UNIX
+        _model.Initialize(providers: ExecutionProvider.ROCm | ExecutionProvider.CPU);
+#endif
     }
     
     [Fact]
