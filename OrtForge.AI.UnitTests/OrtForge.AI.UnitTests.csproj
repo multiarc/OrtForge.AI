@@ -79,6 +79,7 @@
 
     <ItemGroup>
       <ProjectReference Include="..\OrtForge.AI.Models\OrtForge.AI.Models.csproj" />
+      <ProjectReference Include="..\OrtForge.AI.Agent\OrtForge.AI.Agent.csproj" />
     </ItemGroup>
 
 </Project>

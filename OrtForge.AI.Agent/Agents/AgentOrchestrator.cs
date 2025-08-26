@@ -82,11 +82,11 @@ public sealed class AgentOrchestrator
         return response.ToString();
     }
 
-    private static bool IsStopToken(int tokenId) => tokenId == 2 || tokenId == 0; // model dependent EOS ids
+    internal static bool IsStopToken(int tokenId) => tokenId == 2 || tokenId == 0;
 
-    private static bool IsToolCallStart(string decoded) => decoded.Contains("[T-CALL]");
+    internal static bool IsToolCallStart(string decoded) => decoded.Contains("[T-CALL]");
 
-    private static (string name, string args) ParseToolCall(string text)
+    internal static (string name, string args) ParseToolCall(string text)
     {
         // very naive placeholder; caller can replace with JSON schema constrained decoding
         var start = text.LastIndexOf("[T-CALL]");
@@ -96,7 +96,7 @@ public sealed class AgentOrchestrator
         return ("tool", body);
     }
 
-    private static string BuildPrompt(IReadOnlyList<(string role, string content)> history, string user, IReadOnlyList<string> retrieved)
+    internal static string BuildPrompt(IReadOnlyList<(string role, string content)> history, string user, IReadOnlyList<string> retrieved)
     {
         var sb = new StringBuilder();
         sb.AppendLine("<|system|>You are a helpful assistant. Use context when relevant and cite sources.</s>");
