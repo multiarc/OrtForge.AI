@@ -1,10 +1,7 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
 using Microsoft.ML.OnnxRuntime.Tensors;
-using OrtAgent.Core.Generation;
+using OrtForge.AI.Agent.Generation;
 
-namespace OrtAgent.Core.LLM;
+namespace OrtForge.AI.Agent.LLM;
 
 public static class LlamaOptimizations
 {

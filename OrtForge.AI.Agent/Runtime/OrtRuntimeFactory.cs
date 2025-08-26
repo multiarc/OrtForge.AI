@@ -1,6 +1,6 @@
 using Microsoft.ML.OnnxRuntime;
 
-namespace OrtAgent.Core.Runtime;
+namespace OrtForge.AI.Agent.Runtime;
 
 public static class OrtRuntimeFactory
 {
@@ -17,11 +17,9 @@ public static class OrtRuntimeFactory
     public static SessionOptions CreateDefaultSessionOptions()
     {
         var so = new SessionOptions();
-        so.EnableCpuMemArena = true;
-        so.IntraOpNumThreads = Environment.ProcessorCount;
-        so.InterOpNumThreads = Math.Max(1, Environment.ProcessorCount / 2);
         so.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
-        // EPs can be appended externally by caller for CUDA/DirectML etc.
+        so.AppendExecutionProvider_ROCm();
+        so.AppendExecutionProvider_CPU();
         return so;
     }
 }

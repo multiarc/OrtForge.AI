@@ -1,4 +1,4 @@
-using OrtAgent.Core.Rag;
+using OrtForge.AI.Agent.Rag;
 
 namespace OrtForge.AI.UnitTests;
 

@@ -1,6 +1,7 @@
 using Microsoft.ML.Tokenizers;
+using HfTokenizer = Tokenizers.DotNet.Tokenizer;
 
-namespace OrtAgent.Core.Tokenization;
+namespace OrtForge.AI.Agent.Tokenization;
 
 public sealed class TokenizerService
 {
@@ -13,10 +14,10 @@ public sealed class TokenizerService
 
     public static TokenizerService FromPretrained(string pathOrDir)
     {
-        if (System.IO.Directory.Exists(pathOrDir))
+        if (Directory.Exists(pathOrDir))
         {
-            var spmPath = System.IO.Path.Combine(pathOrDir, "sentencepiece.bpe.model");
-            using var fs = System.IO.File.OpenRead(spmPath);
+            var spmPath = Path.Combine(pathOrDir, "sentencepiece.bpe.model");
+            using var fs = File.OpenRead(spmPath);
             var tk = SentencePieceTokenizer.Create(fs);
             return new TokenizerService(tk);
         }
@@ -24,7 +25,7 @@ public sealed class TokenizerService
         {
             if (pathOrDir.EndsWith(".model", StringComparison.OrdinalIgnoreCase))
             {
-                using var fs = System.IO.File.OpenRead(pathOrDir);
+                using var fs = File.OpenRead(pathOrDir);
                 var tk = SentencePieceTokenizer.Create(fs);
                 return new TokenizerService(tk);
             }
@@ -34,33 +35,42 @@ public sealed class TokenizerService
     
     /// <summary>
     /// Creates a TikToken-based tokenizer from a tokenizer.json file.
-    /// Notes for Llama 3.1/3.2:
-    /// - The official tokenizer.json published with Meta Llama 3.x includes the regex pre-tokenization pattern (pat_str)
-    ///   and special tokens. Microsoft.ML.Tokenizers.TiktokenTokenizer reads those from the JSON, so no explicit
-    ///   pre-tokenizer or special tokens need to be supplied here.
-    /// - Only if you have a non-standard or incomplete tokenizer.json (missing pat_str or special tokens) would you
-    ///   need to construct and pass a RegexPreTokenizer or a special-tokens dictionary. This service keeps the API
-    ///   minimal and relies on the canonical JSON. If such a need arises, extend this method to accept optional
-    ///   overrides and pass them to TiktokenTokenizer.Create.
+    /// Note: This only works with OpenAI-compatible tokenizer formats, not Hugging Face BPE formats.
     /// </summary>
-    public static TokenizerService FromJson(string pathOrDir)
+    public static TokenizerService FromTikToken(string filePath)
     {
-        if (System.IO.Directory.Exists(pathOrDir))
+        if (File.Exists(filePath))
         {
-            var spmPath = System.IO.Path.Combine(pathOrDir, "tokenizer.json");
-            using var fs = System.IO.File.OpenRead(spmPath);
+            using var fs = File.OpenRead(filePath);
             var tk = TiktokenTokenizer.Create(fs, null, null);
             return new TokenizerService(tk);
         }
         else
         {
-            if (pathOrDir.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
-            {
-                using var fs = System.IO.File.OpenRead(pathOrDir);
-                var tk = TiktokenTokenizer.Create(fs, null, null);
-                return new TokenizerService(tk);
-            }
-            throw new ArgumentException("Unsupported tokenizer format", nameof(pathOrDir));
+            throw new ArgumentException("File not found", nameof(filePath));
+        }
+    }
+
+    /// <summary>
+    /// Creates a Hugging Face tokenizer from a tokenizer.json file.
+    /// This supports BPE, WordPiece, and other Hugging Face tokenizer formats.
+    /// </summary>
+    public static TokenizerService FromHuggingFace(string tokenizerJsonPath)
+    {
+        if (!File.Exists(tokenizerJsonPath))
+        {
+            throw new ArgumentException("Tokenizer file not found", nameof(tokenizerJsonPath));
+        }
+
+        try
+        {
+            var hfTokenizer = new HfTokenizer(tokenizerJsonPath);
+            var wrapper = new HuggingFaceTokenizerWrapper(hfTokenizer);
+            return new TokenizerService(wrapper);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Failed to load Hugging Face tokenizer: {ex.Message}", ex);
         }
     }
 

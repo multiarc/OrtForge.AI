@@ -1,4 +1,4 @@
-namespace OrtAgent.Core.Generation;
+namespace OrtForge.AI.Agent.Generation;
 
 public static class Sampling
 {

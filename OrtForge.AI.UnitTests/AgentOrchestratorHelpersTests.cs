@@ -1,5 +1,5 @@
-using OrtAgent.Core.Agents;
-using OrtAgent.Core.Generation;
+using OrtForge.AI.Agent.Agents;
+using OrtForge.AI.Agent.Generation;
 
 namespace OrtForge.AI.UnitTests;
 

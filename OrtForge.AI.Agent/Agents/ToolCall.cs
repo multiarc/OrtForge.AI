@@ -1,7 +1,4 @@
-using System;
-using System.Collections.Generic;
-
-namespace OrtAgent.Core.Agents;
+namespace OrtForge.AI.Agent.Agents;
 
 public sealed record ToolCall(
     string Name,

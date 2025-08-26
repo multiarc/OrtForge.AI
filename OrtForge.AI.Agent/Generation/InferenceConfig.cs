@@ -1,4 +1,4 @@
-namespace OrtAgent.Core.Generation;
+namespace OrtForge.AI.Agent.Generation;
 
 public sealed record InferenceConfig
 {

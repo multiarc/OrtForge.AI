@@ -1,7 +1,7 @@
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
-namespace OrtAgent.Core.LLM;
+namespace OrtForge.AI.Agent.LLM;
 
 public sealed class LlamaSession : IDisposable
 {
@@ -18,23 +18,9 @@ public sealed class LlamaSession : IDisposable
     {
         _session = session;
         _kvType = kvType;
-        DetectModelQuantization();
     }
 
     public string ModelName { get; init; } = "default";
-    
-    private void DetectModelQuantization()
-    {
-        foreach (var output in _session.OutputMetadata)
-        {
-            if (output.Value.ElementType == typeof(byte) || 
-                output.Value.ElementType == typeof(sbyte) || 
-                output.Value.ElementType.Name == "Int4")
-            {
-                Console.WriteLine($"Detected quantized model output: {output.Key} with type {output.Value.ElementType}");
-            }
-        }
-    }
 
     public void Dispose()
     {
@@ -70,7 +56,7 @@ public sealed class LlamaSession : IDisposable
     private static TensorElementType GetTensorElementType(Type type)
     {
         if (type == typeof(float)) return TensorElementType.Float;
-        if (type == typeof(System.Half)) return TensorElementType.Float16;
+        if (type == typeof(Half)) return TensorElementType.Float16;
         if (type == typeof(byte)) return TensorElementType.UInt8;
         if (type == typeof(sbyte)) return TensorElementType.Int8;
         if (type == typeof(int)) return TensorElementType.Int32;

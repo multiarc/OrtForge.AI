@@ -1,4 +1,4 @@
-using OrtAgent.Core.Generation;
+using OrtForge.AI.Agent.Generation;
 
 namespace OrtForge.AI.UnitTests;
 

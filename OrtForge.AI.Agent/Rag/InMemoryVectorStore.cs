@@ -1,4 +1,4 @@
-namespace OrtAgent.Core.Rag;
+namespace OrtForge.AI.Agent.Rag;
 
 public sealed class InMemoryVectorStore
 {
