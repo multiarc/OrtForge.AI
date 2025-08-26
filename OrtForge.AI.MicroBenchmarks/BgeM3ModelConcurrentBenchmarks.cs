@@ -1,4 +1,5 @@
-#if !WINDOWS
+#if !WINDOWS //Windows does not support running DirectML in parallel, CPU tests are worthless for this case
+#if ROCM || CUDA
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Engines;
 using Microsoft.ML.OnnxRuntime;
@@ -35,9 +36,9 @@ public class BgeM3ModelConcurrentBenchmarks
     public GraphOptimizationLevel OptimizationLevel { get; set; }
 
 #if ROCM
-        [Params(ExecutionProvider.ROCm | ExecutionProvider.CPU)]
+    [Params(ExecutionProvider.ROCm | ExecutionProvider.CPU)]
 #elif CUDA
-        [Params(ExecutionProvider.CUDA | ExecutionProvider.CPU)]
+    [Params(ExecutionProvider.CUDA | ExecutionProvider.CPU)]
 #endif
     public ExecutionProvider Providers { get; set; }
 
@@ -84,4 +85,5 @@ public class BgeM3ModelConcurrentBenchmarks
         return result;
     }
 }
+#endif
 #endif

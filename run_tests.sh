@@ -1,4 +1,4 @@
 #!/bin/bash
 dotnet restore
-dotnet build --no-restore -c Release
-dotnet test --no-build --no-restore --logger "console;verbosity=detailed"
+dotnet build -c Release --no-restore
+dotnet test -c Release --no-build --no-restore --logger "console;verbosity=detailed"
