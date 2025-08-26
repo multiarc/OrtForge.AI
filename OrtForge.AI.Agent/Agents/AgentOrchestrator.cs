@@ -27,18 +27,16 @@ public sealed class AgentOrchestrator
 
     public string ChatTurn(string user, IReadOnlyList<(string role, string content)> history, Func<string, string>? toolExecutor = null)
     {
-        // RAG retrieve
         var queryVec = _embeddings.EmbedTokenIds(_tokenizer.EncodeToIds(user));
         var retrieved = _vec.TopK(queryVec, 5).Select(x => x.Text).ToList();
 
         var prompt = BuildPrompt(history, user, retrieved);
         var inputIds = _tokenizer.EncodeToIds(prompt);
 
-        // initial tensors
         var idsTensor = new DenseTensor<int>(new[] { 1, inputIds.Length });
         for (int i = 0; i < inputIds.Length; i++) idsTensor[0, i] = inputIds[i];
 
-        var kv = new Dictionary<string, DenseTensor<float>>();
+        var kv = LlamaSession.KvState.Empty;
         var response = new StringBuilder();
 
         for (int step = 0; step < 2048; step++)
@@ -46,25 +44,20 @@ public sealed class AgentOrchestrator
             var outputs = _llm.RunStep(new LlamaSession.StepInputs(idsTensor, kv, PositionIds: null, AttentionMask: null));
             kv = outputs.KvCache;
 
-            // select next token from last time step logits
-            var last = outputs.Logits.Dimensions.ToArray(); // [B, T, V]
+            var last = outputs.Logits.Dimensions.ToArray();
             var vocab = last[^1];
             var span = outputs.Logits.Buffer.Span;
             var logitsLast = span.Slice(span.Length - vocab, vocab);
             var nextId = Sampling.TopK(logitsLast, k: 40, temperature: 0.7);
 
-            // decode incrementally
             var tokenText = _tokenizer.DecodeFromIds(new[] { nextId });
             response.Append(tokenText);
 
-            // stopping
             if (IsStopToken(nextId)) break;
 
-            // feed next token as input ids of shape [1,1]
             idsTensor = new DenseTensor<int>(new[] { 1, 1 });
             idsTensor[0, 0] = nextId;
 
-            // simple tool protocol: if tokenizer emits a tool tag, call tool and inject result
             if (toolExecutor != null && IsToolCallStart(tokenText))
             {
                 var (toolName, toolArgs) = ParseToolCall(response.ToString());
@@ -73,7 +66,6 @@ public sealed class AgentOrchestrator
                 var injectIds = _tokenizer.EncodeToIds(toolInject);
                 var injectTensor = new DenseTensor<int>(new[] { 1, injectIds.Length });
                 for (int i = 0; i < injectIds.Length; i++) injectTensor[0, i] = injectIds[i];
-                // one Run to absorb injection tokens
                 outputs = _llm.RunStep(new LlamaSession.StepInputs(injectTensor, kv, null, null));
                 kv = outputs.KvCache;
             }
@@ -88,7 +80,6 @@ public sealed class AgentOrchestrator
 
     internal static (string name, string args) ParseToolCall(string text)
     {
-        // very naive placeholder; caller can replace with JSON schema constrained decoding
         var start = text.LastIndexOf("[T-CALL]");
         if (start < 0) return ("", "");
         var end = text.IndexOf("[/T-CALL]", start, StringComparison.Ordinal);
