@@ -20,12 +20,12 @@ internal static class Program
             return;
         }
 
-        var llmPath = args[0];
-        var tokenizerPath = args[1];
-        var embPath = args[2];
-        var embTokenizerPath = args[3];
-        var rerankerPath = args.Length > 4 ? args[4] : null;
-        var rerankerTokenizerPath = args.Length > 5 ? args[5] : null;
+        var llmPath = args[0].Trim();
+        var tokenizerPath = args[1].Trim();
+        var embPath = args[2].Trim();
+        var embTokenizerPath = args[3].Trim();
+        var rerankerPath = args.Length > 4 ? args[4].Trim() : null;
+        var rerankerTokenizerPath = args.Length > 5 ? args[5].Trim() : null;
         
         System.Console.WriteLine($"LLM: {llmPath}");
         System.Console.WriteLine($"Tokenizer: {tokenizerPath}");
@@ -42,7 +42,7 @@ internal static class Program
         {
             ModelPath = embPath,
             TokenizerModelPath = embTokenizerPath,
-            TensorElementType = TensorElementType.Float
+            TensorElementType = TensorElementType.Float16
         };
         using var embeddingModel = new BgeM3Model(embeddingOptions);
         embeddingModel.Initialize(providers: ExecutionProvider.CPU | ExecutionProvider.ROCm);
@@ -55,7 +55,7 @@ internal static class Program
             {
                 ModelPath = rerankerPath,
                 TokenizerModelPath = rerankerTokenizerPath,
-                TensorElementType = TensorElementType.Float
+                TensorElementType = TensorElementType.Float16
             };
             rerankerModel = new BgeRerankerM3(rerankerOptions);
             rerankerModel.Initialize(providers: ExecutionProvider.CPU | ExecutionProvider.ROCm);
