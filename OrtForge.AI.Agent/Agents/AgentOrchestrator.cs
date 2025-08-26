@@ -2,11 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using OrtAgent.Core.Generation;
 using OrtAgent.Core.LLM;
 using OrtAgent.Core.Rag;
 using OrtAgent.Core.Tokenization;
+using OrtForge.AI.Models.Models;
 
 namespace OrtAgent.Core.Agents;
 
@@ -14,23 +16,50 @@ public sealed class AgentOrchestrator
 {
     private readonly LlamaSession _llm;
     private readonly TokenizerService _tokenizer;
-    private readonly EmbeddingService _embeddings;
+    private readonly BgeM3Model _embeddings;
+    private readonly BgeRerankerM3? _reranker;
     private readonly InMemoryVectorStore _vec;
 
-    public AgentOrchestrator(LlamaSession llm, TokenizerService tokenizer, EmbeddingService embeddings, InMemoryVectorStore vec)
+    public AgentOrchestrator(LlamaSession llm, TokenizerService tokenizer, BgeM3Model embeddings, InMemoryVectorStore vec, BgeRerankerM3? reranker = null)
     {
         _llm = llm;
         _tokenizer = tokenizer;
         _embeddings = embeddings;
+        _reranker = reranker;
         _vec = vec;
     }
 
-    public string ChatTurn(string user, IReadOnlyList<(string role, string content)> history, InferenceConfig? config = null, Func<string, string>? toolExecutor = null)
+    public async Task<string> ChatTurnAsync(string user, IReadOnlyList<(string role, string content)> history, InferenceConfig? config = null, Func<string, string>? toolExecutor = null)
     {
         config = LlamaOptimizations.GetOptimalConfigForModel(_llm.ModelName, config);
         
-        var queryVec = _embeddings.EmbedTokenIds(_tokenizer.EncodeToIds(user));
-        var retrieved = _vec.TopK(queryVec, 5).Select(x => x.Text).ToList();
+        var queryVec = await _embeddings.CreateEmbeddingAsync(user);
+        var candidateResults = _vec.TopK(queryVec, 10).ToList(); // Get more candidates for reranking
+        
+        var retrieved = candidateResults.Select(x => x.Text).ToList();
+        
+        // Apply reranking if available
+        if (_reranker != null && candidateResults.Count > 1)
+        {
+            var rerankedResults = new List<(float score, string text)>();
+            foreach (var candidate in candidateResults)
+            {
+                var score = await _reranker.GetRerankingScoreAsync(user, candidate.Text);
+                rerankedResults.Add((score: score, text: candidate.Text));
+            }
+            
+            // Sort by reranking score and take top 5
+            retrieved = rerankedResults
+                .OrderByDescending(x => x.score)
+                .Take(5)
+                .Select(x => x.text)
+                .ToList();
+        }
+        else
+        {
+            // Fall back to similarity-based ranking, take top 5
+            retrieved = retrieved.Take(5).ToList();
+        }
 
         var prompt = BuildPrompt(history, user, retrieved, toolExecutor != null);
         var inputIds = _tokenizer.EncodeToIds(prompt);
@@ -43,6 +72,15 @@ public sealed class AgentOrchestrator
         var generatedTokens = new List<int>();
         var sequenceLength = inputIds.Length;
         var toolState = new ToolCallState();
+
+        int GetNextSample(LlamaSession.StepOutputs outputs, int vocab)
+        {
+            var span = outputs.GetLogitsSpan();
+            var logitsLast = span.Slice(span.Length - vocab, vocab);
+            
+            var previousTokensSpan = generatedTokens.Count > 0 ? generatedTokens.ToArray().AsSpan() : ReadOnlySpan<int>.Empty;
+            return Sampling.Sample(logitsLast, config, previousTokensSpan);
+        }
         
         for (int step = 0; step < config.MaxTokens; step++)
         {
@@ -52,11 +90,8 @@ public sealed class AgentOrchestrator
 
             var logitsShape = outputs.Logits.GetTensorTypeAndShape().Shape;
             var vocab = (int)logitsShape[^1];
-            var span = outputs.GetLogitsSpan();
-            var logitsLast = span.Slice(span.Length - vocab, vocab);
             
-            var previousTokensSpan = generatedTokens.Count > 0 ? generatedTokens.ToArray().AsSpan() : ReadOnlySpan<int>.Empty;
-            var nextId = Sampling.Sample(logitsLast, config, previousTokensSpan);
+            var nextId = GetNextSample(outputs, vocab);
             
             generatedTokens.Add(nextId);
 
@@ -101,12 +136,37 @@ public sealed class AgentOrchestrator
         return response.ToString();
     }
 
-    public IEnumerable<string> ChatTurnStream(string user, IReadOnlyList<(string role, string content)> history, InferenceConfig? config = null, Func<string, string>? toolExecutor = null)
+    public async IAsyncEnumerable<string> ChatTurnStreamAsync(string user, IReadOnlyList<(string role, string content)> history, InferenceConfig? config = null, Func<string, string>? toolExecutor = null)
     {
         config = LlamaOptimizations.GetOptimalConfigForModel(_llm.ModelName, config);
         
-        var queryVec = _embeddings.EmbedTokenIds(_tokenizer.EncodeToIds(user));
-        var retrieved = _vec.TopK(queryVec, 5).Select(x => x.Text).ToList();
+        var queryVec = await _embeddings.CreateEmbeddingAsync(user);
+        var candidateResults = _vec.TopK(queryVec, 10).ToList(); // Get more candidates for reranking
+        
+        var retrieved = candidateResults.Select(x => x.Text).ToList();
+        
+        // Apply reranking if available
+        if (_reranker != null && candidateResults.Count > 1)
+        {
+            var rerankedResults = new List<(float score, string text)>();
+            foreach (var candidate in candidateResults)
+            {
+                var score = await _reranker.GetRerankingScoreAsync(user, candidate.Text);
+                rerankedResults.Add((score: score, text: candidate.Text));
+            }
+            
+            // Sort by reranking score and take top 5
+            retrieved = rerankedResults
+                .OrderByDescending(x => x.score)
+                .Take(5)
+                .Select(x => x.text)
+                .ToList();
+        }
+        else
+        {
+            // Fall back to similarity-based ranking, take top 5
+            retrieved = retrieved.Take(5).ToList();
+        }
 
         var prompt = BuildPrompt(history, user, retrieved, toolExecutor != null);
         var inputIds = _tokenizer.EncodeToIds(prompt);
@@ -120,6 +180,15 @@ public sealed class AgentOrchestrator
         var sequenceLength = inputIds.Length;
         var toolState = new ToolCallState();
         
+        int GetNextSample(LlamaSession.StepOutputs outputs, int vocab)
+        {
+            var span = outputs.GetLogitsSpan();
+            var logitsLast = span.Slice(span.Length - vocab, vocab);
+            
+            var previousTokensSpan = generatedTokens.Count > 0 ? generatedTokens.ToArray().AsSpan() : ReadOnlySpan<int>.Empty;
+            return Sampling.Sample(logitsLast, config, previousTokensSpan);
+        }
+        
         for (int step = 0; step < config.MaxTokens; step++)
         {
             var outputs = _llm.RunOptimizedStep(idsTensor, kv, step, sequenceLength + generatedTokens.Count);
@@ -128,11 +197,7 @@ public sealed class AgentOrchestrator
 
             var logitsShape = outputs.Logits.GetTensorTypeAndShape().Shape;
             var vocab = (int)logitsShape[^1];
-            var span = outputs.GetLogitsSpan();
-            var logitsLast = span.Slice(span.Length - vocab, vocab);
-            
-            var previousTokensSpan = generatedTokens.Count > 0 ? generatedTokens.ToArray().AsSpan() : ReadOnlySpan<int>.Empty;
-            var nextId = Sampling.Sample(logitsLast, config, previousTokensSpan);
+            var nextId = GetNextSample(outputs, vocab);
             
             generatedTokens.Add(nextId);
 
@@ -177,6 +242,31 @@ public sealed class AgentOrchestrator
         }
 
         kv?.Dispose();
+    }
+
+    // Backward compatibility methods
+    [Obsolete("Use ChatTurnAsync instead for better performance with async embedding operations")]
+    public string ChatTurn(string user, IReadOnlyList<(string role, string content)> history, InferenceConfig? config = null, Func<string, string>? toolExecutor = null)
+    {
+        return ChatTurnAsync(user, history, config, toolExecutor).GetAwaiter().GetResult();
+    }
+
+    [Obsolete("Use ChatTurnStreamAsync instead for better performance with async embedding operations")]
+    public IEnumerable<string> ChatTurnStream(string user, IReadOnlyList<(string role, string content)> history, InferenceConfig? config = null, Func<string, string>? toolExecutor = null)
+    {
+        var asyncEnumerable = ChatTurnStreamAsync(user, history, config, toolExecutor);
+        var enumerator = asyncEnumerable.GetAsyncEnumerator();
+        try
+        {
+            while (enumerator.MoveNextAsync().GetAwaiter().GetResult())
+            {
+                yield return enumerator.Current;
+            }
+        }
+        finally
+        {
+            enumerator.DisposeAsync().GetAwaiter().GetResult();
+        }
     }
 
     internal static bool IsStopToken(int tokenId, InferenceConfig config) => config.StopTokenIds.Contains(tokenId);

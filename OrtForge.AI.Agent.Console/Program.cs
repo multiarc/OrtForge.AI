@@ -3,6 +3,10 @@ using OrtAgent.Core.LLM;
 using OrtAgent.Core.Rag;
 using OrtAgent.Core.Runtime;
 using OrtAgent.Core.Tokenization;
+using OrtForge.AI.Models.Models;
+using OrtForge.AI.Models.Options;
+using OrtForge.AI.Models.Astractions;
+using Microsoft.ML.OnnxRuntime.Tensors;
 
 namespace OrtAgent.ConsoleApp;
 
@@ -10,25 +14,51 @@ internal static class Program
 {
     private static void Main(string[] args)
     {
-        if (args.Length < 2)
+        if (args.Length < 4)
         {
-            System.Console.WriteLine("Usage: OrtAgent.Console <llm.onnx> <tokenizer.json|sentencepiece.bpe.model> [embedding.onnx]");
+            System.Console.WriteLine("Usage: OrtAgent.Console <llm.onnx> <tokenizer.json|sentencepiece.bpe.model> <embedding.onnx> <embedding_tokenizer.model> [reranker.onnx] [reranker_tokenizer.model]");
             return;
         }
 
         var llmPath = args[0];
         var tokenizerPath = args[1];
-        var embPath = args.Length > 2 ? args[2] : args[0]; // allow same model for quick test
+        var embPath = args[2];
+        var embTokenizerPath = args[3];
+        var rerankerPath = args.Length > 4 ? args[4] : null;
+        var rerankerTokenizerPath = args.Length > 5 ? args[5] : null;
 
         using var llmSession = OrtRuntimeFactory.CreateSession(llmPath);
-        using var embSession = OrtRuntimeFactory.CreateSession(embPath);
         using var llama = new LlamaSession(llmSession);
-        using var embed = new EmbeddingService(embSession);
+        
+        // Initialize embedding model with BgeM3Model
+        var embeddingOptions = new BgeM3Options
+        {
+            ModelPath = embPath,
+            TokenizerModelPath = embTokenizerPath,
+            TensorElementType = TensorElementType.Float
+        };
+        using var embeddingModel = new BgeM3Model(embeddingOptions);
+        embeddingModel.Initialize(providers: ExecutionProvider.CPU);
+        
+        // Initialize reranker if provided
+        BgeRerankerM3? rerankerModel = null;
+        if (!string.IsNullOrEmpty(rerankerPath) && !string.IsNullOrEmpty(rerankerTokenizerPath))
+        {
+            var rerankerOptions = new BgeM3Options
+            {
+                ModelPath = rerankerPath,
+                TokenizerModelPath = rerankerTokenizerPath,
+                TensorElementType = TensorElementType.Float
+            };
+            rerankerModel = new BgeRerankerM3(rerankerOptions);
+            rerankerModel.Initialize(providers: ExecutionProvider.CPU);
+        }
+
         var tok = tokenizerPath.EndsWith(".json", StringComparison.OrdinalIgnoreCase)
             ? TokenizerService.FromJson(tokenizerPath)
             : TokenizerService.FromPretrained(tokenizerPath);
         var vec = new InMemoryVectorStore();
-        var agent = new AgentOrchestrator(llama, tok, embed, vec);
+        var agent = new AgentOrchestrator(llama, tok, embeddingModel, vec, rerankerModel);
 
         System.Console.WriteLine("Enter your message (empty line to quit):");
         while (true)
@@ -36,10 +66,14 @@ internal static class Program
             System.Console.Write("> ");
             var user = System.Console.ReadLine();
             if (string.IsNullOrWhiteSpace(user)) break;
-            var answer = agent.ChatTurn(user!, Array.Empty<(string role, string content)>());
+            var answer = agent.ChatTurnAsync(user!, Array.Empty<(string role, string content)>()).GetAwaiter().GetResult();
             System.Console.WriteLine();
             System.Console.WriteLine($"Assistant: {answer}");
         }
+        
+        // Dispose models
+        embeddingModel.Dispose();
+        rerankerModel?.Dispose();
     }
 }
 

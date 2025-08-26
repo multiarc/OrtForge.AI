@@ -8,6 +8,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\OrtForge.AI.Agent\OrtForge.AI.Agent.csproj" />
+    <ProjectReference Include="..\OrtForge.AI.Models\OrtForge.AI.Models.csproj" />
   </ItemGroup>
 </Project>
 
