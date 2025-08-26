@@ -71,7 +71,7 @@ public class BgeRerankerM3ModelBenchmarks
     }
 
     [Benchmark]
-    public async Task<float> CreateEmbeddingAsync()
+    public async Task<float> GetRerankingScoreAsync()
     {
         return await _model.GetRerankingScoreAsync("Field that combines several domains and expertise to extract insights from information.", _text);
     }
