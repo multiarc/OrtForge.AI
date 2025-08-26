@@ -3,13 +3,14 @@ using Microsoft.ML.OnnxRuntime.Tensors;
 using OrtForge.AI.Models.Astractions;
 using OrtForge.AI.Models.Models;
 using OrtForge.AI.Models.Options;
+using Xunit.Abstractions;
 
 namespace OrtForge.AI.UnitTests;
 
 public class EmbeddingGenerationTests
 {
     private readonly BgeM3Model _model;
-    public EmbeddingGenerationTests() {
+    public EmbeddingGenerationTests(ITestOutputHelper outputHelper) {
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         _model = new BgeM3Model(new BgeM3Options
         {
@@ -18,9 +19,17 @@ public class EmbeddingGenerationTests
             TensorElementType = TensorElementType.Float16
         });
 #if WINDOWS
+        outputHelper.WriteLine("Running on DirectML.");
         _model.Initialize(providers: ExecutionProvider.DirectML | ExecutionProvider.CPU);
-#elif UNIX
+#elif ROCM
+        outputHelper.WriteLine("Running on ROCm.");
         _model.Initialize(providers: ExecutionProvider.ROCm | ExecutionProvider.CPU);
+#elif CUDA
+        outputHelper.WriteLine("Running on CUDA.");
+        _model.Initialize(providers: ExecutionProvider.CUDA | ExecutionProvider.CPU);
+#else
+        outputHelper.WriteLine("Running on CPU.");
+        _model.Initialize();
 #endif
     }
     

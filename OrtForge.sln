@@ -15,7 +15,7 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "docs", "docs", "{63CDC6A4-3
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Models.Astractions", "OrtForge.AI.Models.Astractions\OrtForge.AI.Models.Astractions.csproj", "{40A4313C-6826-4E8D-9A01-DA760DE4CE26}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Runtime.ROCm.Linux", "OrtForge.AI.Runtime.ROCm.Linux\OrtForge.AI.Runtime.ROCm.Linux.csproj", "{8FF1CB84-3A1F-425A-8E9D-45EF01092236}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Runtime.ROCm", "OrtForge.AI.Runtime.ROCm\OrtForge.AI.Runtime.ROCm.csproj", "{8FF1CB84-3A1F-425A-8E9D-45EF01092236}"
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Files", "Solution Files", "{2683178C-EFDD-4951-B0C4-EE84EF8AFD9C}"
 	ProjectSection(SolutionItems) = preProject
@@ -26,6 +26,16 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Files", "Solution 
 	EndProjectSection
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OrtForge.AI.Runtime.CUDA", "OrtForge.AI.Runtime.CUDA\OrtForge.AI.Runtime.CUDA.csproj", "{EA1C56B3-FF6C-4605-BBDB-17CA16E22CDC}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "scripts", "scripts", "{98546707-D1DC-4F7E-AA8F-2BA7CBA6F885}"
+	ProjectSection(SolutionItems) = preProject
+		run_tests.sh = run_tests.sh
+		run_tests_CUDA.sh = run_tests_CUDA.sh
+		run_tests_ROCm.sh = run_tests_ROCm.sh
+		run_benchmarks.sh = run_benchmarks.sh
+		run_benchmarks_CUDA.sh = run_benchmarks_CUDA.sh
+		run_benchmarks_ROCm.sh = run_benchmarks_ROCm.sh
+	EndProjectSection
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

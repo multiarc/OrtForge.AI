@@ -34,7 +34,11 @@ public class BgeRerankerM3ModelConcurrentBenchmarks
     [Params(GraphOptimizationLevel.ORT_ENABLE_ALL)]
     public GraphOptimizationLevel OptimizationLevel { get; set; }
 
-    [Params(ExecutionProvider.ROCm | ExecutionProvider.CPU)]
+#if ROCM
+        [Params(ExecutionProvider.ROCm | ExecutionProvider.CPU)]
+#elif CUDA
+        [Params(ExecutionProvider.CUDA | ExecutionProvider.CPU)]
+#endif
     public ExecutionProvider Providers { get; set; }
 
     [Params(ExecutionMode.ORT_SEQUENTIAL)]

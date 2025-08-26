@@ -42,12 +42,12 @@ public class BgeRerankerM3ModelBenchmarks
         ExecutionProvider.DirectML, ExecutionProvider.DirectML | ExecutionProvider.CPU
 #endif        
     )]
-#elif UNIX
-    [Params(ExecutionProvider.CPU, 
+#elif LINUX
+    [Params(ExecutionProvider.CPU
 #if ROCM
-        ExecutionProvider.ROCm, ExecutionProvider.ROCm | ExecutionProvider.CPU
+        , ExecutionProvider.ROCm, ExecutionProvider.ROCm | ExecutionProvider.CPU
 #elif CUDA
-        ExecutionProvider.CUDA, ExecutionProvider.CUDA | ExecutionProvider.CPU
+        , ExecutionProvider.CUDA, ExecutionProvider.CUDA | ExecutionProvider.CPU
 #endif
     )]
 #endif
