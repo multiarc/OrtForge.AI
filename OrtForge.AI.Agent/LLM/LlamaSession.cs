@@ -6,51 +6,18 @@ namespace OrtForge.AI.Agent.LLM;
 
 public sealed class LlamaSession : IDisposable
 {
-    public enum KvStorageType { Float32, Float16, Int4 }
-
     private readonly InferenceSession _session;
-    private readonly KvStorageType _kvType;
     
-    private readonly Dictionary<string, OrtValue> _kvTensorPool = new();
-    private readonly Dictionary<string, TensorElementType> _kvTensorTypes = new();
-    private readonly object _tensorLock = new object();
-
-    public LlamaSession(InferenceSession session, KvStorageType kvType = KvStorageType.Float32)
+    public LlamaSession(InferenceSession session)
     {
         _session = session;
-        _kvType = kvType;
     }
 
     public string ModelName { get; init; } = "default";
 
     public void Dispose()
     {
-        lock (_tensorLock)
-        {
-            foreach (var tensor in _kvTensorPool.Values)
-            {
-                tensor?.Dispose();
-            }
-            _kvTensorPool.Clear();
-            _kvTensorTypes.Clear();
-        }
         _session.Dispose();
-    }
-    
-    private OrtValue GetOrCreateKvTensor(string name, long[] shape, TensorElementType elementType)
-    {
-        lock (_tensorLock)
-        {
-            if (_kvTensorPool.TryGetValue(name, out var existingTensor))
-            {
-                return existingTensor;
-            }
-            
-            var tensor = OrtValue.CreateAllocatedTensorValue(OrtAllocator.DefaultInstance, elementType, shape);
-            _kvTensorPool[name] = tensor;
-            _kvTensorTypes[name] = elementType;
-            return tensor;
-        }
     }
     
     private static TensorElementType GetTensorElementType(Type type)
@@ -64,36 +31,6 @@ public sealed class LlamaSession : IDisposable
         if (type == typeof(int)) return TensorElementType.Int32;
         if (type == typeof(long)) return TensorElementType.Int64;
         return TensorElementType.Float;
-    }
-
-    public sealed class KvState : IDisposable
-    {
-        public readonly Dictionary<string, OrtValue> Tensors = new();
-        public static KvState Empty => new();
-        private bool _disposed = false;
-        
-        public void AddTensor(string name, OrtValue tensor)
-        {
-            Tensors[name] = tensor;
-        }
-        
-        public OrtValue? GetTensor(string name)
-        {
-            return Tensors.TryGetValue(name, out var tensor) ? tensor : null;
-        }
-        
-        public void Dispose()
-        {
-            if (!_disposed)
-            {
-                foreach (var tensor in Tensors.Values)
-                {
-                    tensor?.Dispose();
-                }
-                Tensors.Clear();
-                _disposed = true;
-            }
-        }
     }
 
     public sealed record StepInputs(
@@ -146,7 +83,6 @@ public sealed class LlamaSession : IDisposable
         public void Dispose()
         {
             Logits?.Dispose();
-            KvCache?.Dispose();
         }
         
         public Span<float> GetLogitsSpan()
@@ -290,7 +226,7 @@ public sealed class LlamaSession : IDisposable
         // Handle KV cache inputs - create empty tensors for missing ones on first step
         var providedKvInputs = new HashSet<string>();
         
-        if (inputs.Kv != null && inputs.Kv.Tensors.Count > 0)
+        if (inputs.Kv.Tensors.Count > 0)
         {
             foreach (var kv in inputs.Kv.Tensors)
             {
@@ -335,8 +271,10 @@ public sealed class LlamaSession : IDisposable
                 {
                     if (kvDims[i] < 0)
                     {
-                        if (i == 0) kvDims[i] = (int)batchSize;
-                        else if (i == 2) kvDims[i] = 0; // Sequence length starts at 0 for empty cache
+                        if (i == 0) 
+                            kvDims[i] = (int)batchSize;
+                        else if (i == 2) 
+                            kvDims[i] = 0; // Sequence length starts at 0 for empty cache
                     }
                 }
                 
@@ -379,7 +317,7 @@ public sealed class LlamaSession : IDisposable
                     }
                 }
                 var longDims = kvDims.Select(d => (long)d).ToArray();
-                var kvTensor = GetOrCreateKvTensor(output.Key, longDims, GetTensorElementType(output.Value.ElementType));
+                var kvTensor = inputs.Kv.KvArena.GetOrCreateKvTensor(output.Key, longDims, GetTensorElementType(output.Value.ElementType));
                 outputValues.Add(kvTensor);
             }
         }
@@ -401,28 +339,25 @@ public sealed class LlamaSession : IDisposable
             throw new InvalidOperationException($"Error running the model: {ex.Message}", ex);
         }
 
-        var newKv = new KvState();
+        var newKv = new KvState(inputs.Kv.KvArena);
         OrtValue? logits = null;
         
-        using (var disposableInputs = new DisposableOrtValueList(inputValuesArray.Where(t => !_kvTensorPool.ContainsValue(t))))
+        for (int i = 0; i < outputNamesArray.Length; i++)
         {
-            for (int i = 0; i < outputNamesArray.Length; i++)
+            var outputName = outputNamesArray[i];
+            var outputTensor = outputValuesArray[i];
+            
+            if (outputName.ToLower().Contains("logits"))
             {
-                var outputName = outputNamesArray[i];
-                var outputTensor = outputValuesArray[i];
-                
-                if (outputName.ToLower().Contains("logits"))
+                logits = outputTensor;
+            }
+            else
+            {
+                newKv.AddTensor(outputName, outputTensor);
+                var alias = MapKvOutputToPastAlias(outputName);
+                if (alias != null)
                 {
-                    logits = outputTensor;
-                }
-                else
-                {
-                    newKv.AddTensor(outputName, outputTensor);
-                    var alias = MapKvOutputToPastAlias(outputName);
-                    if (alias != null)
-                    {
-                        newKv.AddTensor(alias, outputTensor);
-                    }
+                    newKv.AddTensor(alias, outputTensor);
                 }
             }
         }
@@ -534,5 +469,3 @@ public sealed class LlamaSession : IDisposable
 
 
 }
-
-

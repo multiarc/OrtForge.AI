@@ -62,7 +62,7 @@ public sealed class AgentOrchestrator
 
         var idsArray = inputIds.Select(id => (long)id).ToArray();
 
-        var kv = LlamaSession.KvState.Empty;
+        var kv = new KvState(new KvArena());
         var response = new StringBuilder();
         var generatedTokens = new List<int>();
         var sequenceLength = inputIds.Length;
@@ -143,14 +143,12 @@ public sealed class AgentOrchestrator
 
             if (IsStopToken(nextId, config) || IsStopSequence(response.ToString(), config)) break;
 
-            // No need to update idsArray - we compute currentInput dynamically each step
-            
-            kv?.Dispose();
             kv = newKv;
             outputs.Dispose();
         }
+        
+        kv.KvArena.Dispose();
 
-        kv?.Dispose();
         return response.ToString();
     }
 
