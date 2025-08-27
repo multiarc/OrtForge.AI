@@ -16,6 +16,7 @@ public sealed class ConversationSession : IDisposable
     public string SessionId { get; } = Guid.NewGuid().ToString("N")[..8];
     public IReadOnlyList<(string role, string content)> History => _history;
     public int TotalTokensProcessed => _kvState?.AccumulatedSequenceLength ?? 0;
+    public bool IsInitialized => _isSystemPromptProcessed;
     
 
     public int MaxHistoryLength { get; set; } = 20; // Keep last N messages

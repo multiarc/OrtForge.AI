@@ -25,7 +25,7 @@ public sealed class AgentOrchestrator
         _vec = vec;
     }
 
-    public async Task<string> ChatTurnAsync(string user, IReadOnlyList<(string role, string content)> history, InferenceConfig? config = null, Func<string, string>? toolExecutor = null)
+    public async Task<string> ChatTurnAsync(string user, IReadOnlyList<(string role, string content)> history, InferenceConfig? config = null, Func<string, string>? toolExecutor = null, ConversationSession? session = null)
     {
         config = LlamaOptimizations.GetOptimalConfigForModel(_llm.ModelName, config);
         
@@ -57,15 +57,32 @@ public sealed class AgentOrchestrator
             retrieved = retrieved.Take(5).ToList();
         }
 
-        var prompt = BuildPrompt(history, user, retrieved, toolExecutor != null);
-        var inputIds = _tokenizer.EncodeToIds(prompt);
-
-        var idsArray = inputIds.Select(id => (long)id).ToArray();
-
-        var kv = new KvState();
+        KvState kv;
+        long[] idsArray;
+        
+        if (session != null)
+        {
+            if (!session.IsInitialized)
+            {
+                await session.InitializeSystemPromptAsync(_llm, retrieved, toolExecutor != null);
+            }
+            
+            await session.AddMessageAsync("user", user, _llm);
+            
+            var assistantStartTokens = _tokenizer.EncodeToIds("<|start_header_id|>assistant<|end_header_id|>\n\n");
+            idsArray = assistantStartTokens.Select(id => (long)id).ToArray();
+            kv = session.GetCurrentKvState();
+        }
+        else
+        {
+            var prompt = BuildPrompt(history, user, retrieved, toolExecutor != null);
+            var inputIds = _tokenizer.EncodeToIds(prompt);
+            idsArray = inputIds.Select(id => (long)id).ToArray();
+            kv = new KvState();
+        }
         var response = new StringBuilder();
         var generatedTokens = new List<int>();
-        var sequenceLength = inputIds.Length;
+        var sequenceLength = idsArray.Length;
         var toolState = new ToolCallState();
 
         int GetNextSample(LlamaSession.StepOutputs outputs, int vocab)
@@ -170,9 +187,16 @@ public sealed class AgentOrchestrator
             outputs.Dispose();
         }
         
-        kv.Dispose(); // Clean up KV tensors
+        if (session != null)
+        {
+            session.UpdateKvState(kv);
+            await session.AddMessageAsync("assistant", response.ToString(), null);
+        }
+        else
+        {
+            kv.Dispose();
+        }
 
-        // Ensure we end with a newline for proper formatting
         if (!response.ToString().EndsWith('\n'))
         {
             Console.WriteLine();
