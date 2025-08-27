@@ -85,14 +85,15 @@ public sealed class AgentOrchestrator
                 var lastTokenStart = (seqLen - 1) * vocab;
                 logitsForSampling = span.Slice(lastTokenStart, vocab);
                 
-                Console.WriteLine($"Logits [{batchSize}, {seqLen}, {vocabSize}] -> using position {seqLen-1}");
+                // Using last token position for multi-token logits
             }
             else
             {
                 // Fallback: assume span is already the right size [vocab]
                 logitsForSampling = span;
-                Console.WriteLine($"Logits shape: [{string.Join(", ", logitsShape)}] -> using full span");
             }
+            
+            // Use normal sampling with temperature to break deterministic loops
             
             var previousTokensSpan = generatedTokens.Count > 0 ? generatedTokens.ToArray().AsSpan() : ReadOnlySpan<int>.Empty;
             return Sampling.Sample(logitsForSampling, config, previousTokensSpan);
@@ -100,7 +101,10 @@ public sealed class AgentOrchestrator
         
         for (int step = 0; step < config.MaxTokens; step++)
         {
-            var outputs = _llm.RunOptimizedStep(idsArray, kv, step, sequenceLength + generatedTokens.Count);
+            // First step: use full prompt, subsequent steps: use only the last generated token
+            var currentInput = step == 0 ? idsArray : new long[] { generatedTokens[^1] };
+            
+            var outputs = await _llm.RunOptimizedStep(currentInput, kv, step, sequenceLength + generatedTokens.Count);
             
             var newKv = outputs.KvCache;
 
@@ -112,7 +116,6 @@ public sealed class AgentOrchestrator
             generatedTokens.Add(nextId);
 
             var tokenText = _tokenizer.DecodeFromIds(new[] { nextId });
-            Console.WriteLine($"Generated token ID: {nextId}, text: '{tokenText}'");
             response.Append(tokenText);
             
             if (toolExecutor != null)
@@ -130,7 +133,7 @@ public sealed class AgentOrchestrator
                         
                         var injectArray = injectedTokens.Select(token => (long)token).ToArray();
                         
-                        var injectOutputs = _llm.RunOptimizedStep(injectArray, newKv, step, sequenceLength + generatedTokens.Count);
+                        var injectOutputs = await _llm.RunOptimizedStep(injectArray, newKv, step, sequenceLength + generatedTokens.Count);
                         outputs.Dispose();
                         outputs = injectOutputs;
                         newKv = injectOutputs.KvCache;
@@ -140,7 +143,7 @@ public sealed class AgentOrchestrator
 
             if (IsStopToken(nextId, config) || IsStopSequence(response.ToString(), config)) break;
 
-            idsArray = [(long)nextId];
+            // No need to update idsArray - we compute currentInput dynamically each step
             
             kv?.Dispose();
             kv = newKv;
@@ -149,158 +152,6 @@ public sealed class AgentOrchestrator
 
         kv?.Dispose();
         return response.ToString();
-    }
-
-    public async IAsyncEnumerable<string> ChatTurnStreamAsync(string user, IReadOnlyList<(string role, string content)> history, InferenceConfig? config = null, Func<string, string>? toolExecutor = null)
-    {
-        config = LlamaOptimizations.GetOptimalConfigForModel(_llm.ModelName, config);
-        
-        var queryVec = await _embeddings.CreateEmbeddingAsync(user);
-        var candidateResults = _vec.TopK(queryVec, 10).ToList(); // Get more candidates for reranking
-        
-        var retrieved = candidateResults.Select(x => x.Text).ToList();
-        
-        // Apply reranking if available
-        if (_reranker != null && candidateResults.Count > 1)
-        {
-            var rerankedResults = new List<(float score, string text)>();
-            foreach (var candidate in candidateResults)
-            {
-                var score = await _reranker.GetRerankingScoreAsync(user, candidate.Text);
-                rerankedResults.Add((score: score, text: candidate.Text));
-            }
-            
-            // Sort by reranking score and take top 5
-            retrieved = rerankedResults
-                .OrderByDescending(x => x.score)
-                .Take(5)
-                .Select(x => x.text)
-                .ToList();
-        }
-        else
-        {
-            // Fall back to similarity-based ranking, take top 5
-            retrieved = retrieved.Take(5).ToList();
-        }
-
-        var prompt = BuildPrompt(history, user, retrieved, toolExecutor != null);
-        var inputIds = _tokenizer.EncodeToIds(prompt);
-
-        var idsArray = inputIds.Select(id => (long)id).ToArray();
-
-        var kv = LlamaSession.KvState.Empty;
-        var response = new StringBuilder();
-        var generatedTokens = new List<int>();
-        var sequenceLength = inputIds.Length;
-        var toolState = new ToolCallState();
-        
-        int GetNextSample(LlamaSession.StepOutputs outputs, int vocab)
-        {
-            var span = outputs.GetLogitsSpan();
-            var logitsShape = outputs.Logits.GetTensorTypeAndShape().Shape;
-            
-            // For logits shape [batch, seq_len, vocab], we need the last token's logits
-            Span<float> logitsForSampling;
-            if (logitsShape.Length == 3) // [batch, seq_len, vocab]
-            {
-                var batchSize = (int)logitsShape[0];
-                var seqLen = (int)logitsShape[1];
-                var vocabSize = (int)logitsShape[2];
-                
-                // Take logits for the last token position: span[(seqLen-1) * vocab : seqLen * vocab]
-                var lastTokenStart = (seqLen - 1) * vocab;
-                logitsForSampling = span.Slice(lastTokenStart, vocab);
-                
-                Console.WriteLine($"Logits [{batchSize}, {seqLen}, {vocabSize}] -> using position {seqLen-1}");
-            }
-            else
-            {
-                // Fallback: assume span is already the right size [vocab]
-                logitsForSampling = span;
-                Console.WriteLine($"Logits shape: [{string.Join(", ", logitsShape)}] -> using full span");
-            }
-            
-            var previousTokensSpan = generatedTokens.Count > 0 ? generatedTokens.ToArray().AsSpan() : ReadOnlySpan<int>.Empty;
-            return Sampling.Sample(logitsForSampling, config, previousTokensSpan);
-        }
-        
-        for (int step = 0; step < config.MaxTokens; step++)
-        {
-            var outputs = _llm.RunOptimizedStep(idsArray, kv, step, sequenceLength + generatedTokens.Count);
-            
-            var newKv = outputs.KvCache;
-
-            var logitsShape = outputs.Logits.GetTensorTypeAndShape().Shape;
-            var vocab = (int)logitsShape[^1];
-            var nextId = GetNextSample(outputs, vocab);
-            
-            generatedTokens.Add(nextId);
-
-            var tokenText = _tokenizer.DecodeFromIds(new[] { nextId });
-            Console.WriteLine($"Generated token ID: {nextId}, text: '{tokenText}'");
-            response.Append(tokenText);
-            yield return tokenText;
-            
-            if (toolExecutor != null)
-            {
-                toolState.AppendToken(tokenText);
-                
-                var pendingCall = toolState.GetNextPendingCall();
-                if (pendingCall != null)
-                {
-                    var (injectedText, injectedTokens) = ExecuteToolCall(pendingCall, toolExecutor, toolState);
-                    if (!string.IsNullOrEmpty(injectedText))
-                    {
-                        response.Append(injectedText);
-                        generatedTokens.AddRange(injectedTokens);
-                        
-                        var injectArray = injectedTokens.Select(token => (long)token).ToArray();
-                        
-                        var injectOutputs = _llm.RunOptimizedStep(injectArray, newKv, step, sequenceLength + generatedTokens.Count);
-                        outputs.Dispose();
-                        outputs = injectOutputs;
-                        newKv = injectOutputs.KvCache;
-                        
-                        yield return injectedText;
-                    }
-                }
-            }
-
-            if (IsStopToken(nextId, config) || IsStopSequence(response.ToString(), config)) break;
-
-            idsArray = [(long)nextId];
-            
-            kv?.Dispose();
-            kv = newKv;
-            outputs.Dispose();
-        }
-
-        kv?.Dispose();
-    }
-
-    // Backward compatibility methods
-    [Obsolete("Use ChatTurnAsync instead for better performance with async embedding operations")]
-    public string ChatTurn(string user, IReadOnlyList<(string role, string content)> history, InferenceConfig? config = null, Func<string, string>? toolExecutor = null)
-    {
-        return ChatTurnAsync(user, history, config, toolExecutor).GetAwaiter().GetResult();
-    }
-
-    [Obsolete("Use ChatTurnStreamAsync instead for better performance with async embedding operations")]
-    public IEnumerable<string> ChatTurnStream(string user, IReadOnlyList<(string role, string content)> history, InferenceConfig? config = null, Func<string, string>? toolExecutor = null)
-    {
-        var asyncEnumerable = ChatTurnStreamAsync(user, history, config, toolExecutor);
-        var enumerator = asyncEnumerable.GetAsyncEnumerator();
-        try
-        {
-            while (enumerator.MoveNextAsync().GetAwaiter().GetResult())
-            {
-                yield return enumerator.Current;
-            }
-        }
-        finally
-        {
-            enumerator.DisposeAsync().GetAwaiter().GetResult();
-        }
     }
 
     internal static bool IsStopToken(int tokenId, InferenceConfig config) => config.StopTokenIds.Contains(tokenId);

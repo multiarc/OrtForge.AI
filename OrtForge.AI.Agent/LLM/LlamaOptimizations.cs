@@ -48,7 +48,22 @@ public static class LlamaOptimizations
             return null;
         }
 
-        return [sequenceLength + currentStep];
+        if (currentStep == 0)
+        {
+            // First step: create position IDs for all tokens in the sequence [0, 1, 2, ..., sequenceLength-1]
+            var positionIds = new long[sequenceLength];
+            for (int i = 0; i < sequenceLength; i++)
+            {
+                positionIds[i] = i;
+            }
+            return positionIds;
+        }
+        else
+        {
+            // Subsequent steps: single position ID for the new token being added
+            var posId = new long[] { sequenceLength - 1 };
+            return posId;
+        }
     }
 
     public static long[]? CreateOptimalAttentionMask(int totalSequenceLength, string modelName)
@@ -122,10 +137,10 @@ public static class LlamaOptimizations
     {
         return modelKey switch
         {
-            "llama-3.1" or "llama-3.2" => false,
-            "llama-3" => false,
+            "llama-3.1" or "llama-3.2" => true,  // Fixed: provide position IDs for proper generation
+            "llama-3" => true,                   // Fixed: provide position IDs for proper generation
             "llama-2" => true,
-            _ => false
+            _ => true  // Default to providing position IDs
         };
     }
 
@@ -133,8 +148,8 @@ public static class LlamaOptimizations
     {
         return modelKey switch
         {
-            "llama-3.1" or "llama-3.2" => false,
-            "llama-3" => false,
+            "llama-3.1" or "llama-3.2" => true,
+            "llama-3" => true,
             "llama-2" => true,
             _ => true
         };

@@ -432,25 +432,20 @@ public sealed class LlamaSession : IDisposable
 
         return new StepOutputs(logits, newKv);
     }
-    
-    public StepOutputs RunStep(StepInputs inputs)
-    {
-        return RunStepAsync(inputs, CancellationToken.None).GetAwaiter().GetResult();
-    }
 
     public async Task<StepOutputs> RunOptimizedStepAsync(long[] inputIds, KvState kv, int currentStep, int sequenceLength, CancellationToken cancellationToken = default)
     {
         var positionIds = LlamaOptimizations.CreateOptimalPositionIds(sequenceLength, currentStep, ModelName);
-        // Always provide attention mask since model requires it
+        // Always provide attention mask since model requires it - must match current input length for KV cache
         var attentionMask = LlamaOptimizations.CreateOptimalAttentionMask(inputIds.Length, ModelName);
         
         using var inputs = StepInputs.Create(inputIds, kv, positionIds, attentionMask);
         return await RunStepAsync(inputs, cancellationToken);
     }
 
-    public StepOutputs RunOptimizedStep(long[] inputIds, KvState kv, int currentStep, int sequenceLength)
+    public async Task<StepOutputs> RunOptimizedStep(long[] inputIds, KvState kv, int currentStep, int sequenceLength)
     {
-        return RunOptimizedStepAsync(inputIds, kv, currentStep, sequenceLength, CancellationToken.None).GetAwaiter().GetResult();
+        return await RunOptimizedStepAsync(inputIds, kv, currentStep, sequenceLength, CancellationToken.None);
     }
 
     

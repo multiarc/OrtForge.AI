@@ -12,7 +12,7 @@ namespace OrtForge.AI.Agent.Console;
 
 internal static class Program
 {
-    private static void Main(string[] args)
+    private static async Task Main(string[] args)
     {
         if (args.Length < 4)
         {
@@ -71,7 +71,7 @@ internal static class Program
             System.Console.Write("> ");
             var user = System.Console.ReadLine();
             if (string.IsNullOrWhiteSpace(user)) break;
-            var answer = agent.ChatTurnAsync(user!, Array.Empty<(string role, string content)>()).GetAwaiter().GetResult();
+            var answer = await agent.ChatTurnAsync(user!, Array.Empty<(string role, string content)>());
             System.Console.WriteLine();
             System.Console.WriteLine($"Assistant: {answer}");
         }
