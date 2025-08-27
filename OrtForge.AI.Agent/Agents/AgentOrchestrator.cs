@@ -60,8 +60,7 @@ public sealed class AgentOrchestrator
         var prompt = BuildPrompt(history, user, retrieved, toolExecutor != null);
         var inputIds = _tokenizer.EncodeToIds(prompt);
 
-        var idsTensor = new DenseTensor<int>(new[] { 1, inputIds.Length });
-        for (int i = 0; i < inputIds.Length; i++) idsTensor[0, i] = inputIds[i];
+        var idsArray = inputIds.Select(id => (long)id).ToArray();
 
         var kv = LlamaSession.KvState.Empty;
         var response = new StringBuilder();
@@ -80,7 +79,7 @@ public sealed class AgentOrchestrator
         
         for (int step = 0; step < config.MaxTokens; step++)
         {
-            var outputs = _llm.RunOptimizedStep(idsTensor, kv, step, sequenceLength + generatedTokens.Count);
+            var outputs = _llm.RunOptimizedStep(idsArray, kv, step, sequenceLength + generatedTokens.Count);
             
             var newKv = outputs.KvCache;
 
@@ -107,10 +106,9 @@ public sealed class AgentOrchestrator
                         response.Append(injectedText);
                         generatedTokens.AddRange(injectedTokens);
                         
-                        var injectTensor = new DenseTensor<int>(new[] { 1, injectedTokens.Length });
-                        for (int i = 0; i < injectedTokens.Length; i++) injectTensor[0, i] = injectedTokens[i];
+                        var injectArray = injectedTokens.Select(token => (long)token).ToArray();
                         
-                        var injectOutputs = _llm.RunOptimizedStep(injectTensor, newKv, step, sequenceLength + generatedTokens.Count);
+                        var injectOutputs = _llm.RunOptimizedStep(injectArray, newKv, step, sequenceLength + generatedTokens.Count);
                         outputs.Dispose();
                         outputs = injectOutputs;
                         newKv = injectOutputs.KvCache;
@@ -120,8 +118,7 @@ public sealed class AgentOrchestrator
 
             if (IsStopToken(nextId, config) || IsStopSequence(response.ToString(), config)) break;
 
-            idsTensor = new DenseTensor<int>(new[] { 1, 1 });
-            idsTensor[0, 0] = nextId;
+            idsArray = [(long)nextId];
             
             kv?.Dispose();
             kv = newKv;
@@ -167,8 +164,7 @@ public sealed class AgentOrchestrator
         var prompt = BuildPrompt(history, user, retrieved, toolExecutor != null);
         var inputIds = _tokenizer.EncodeToIds(prompt);
 
-        var idsTensor = new DenseTensor<int>(new[] { 1, inputIds.Length });
-        for (int i = 0; i < inputIds.Length; i++) idsTensor[0, i] = inputIds[i];
+        var idsArray = inputIds.Select(id => (long)id).ToArray();
 
         var kv = LlamaSession.KvState.Empty;
         var response = new StringBuilder();
@@ -187,7 +183,7 @@ public sealed class AgentOrchestrator
         
         for (int step = 0; step < config.MaxTokens; step++)
         {
-            var outputs = _llm.RunOptimizedStep(idsTensor, kv, step, sequenceLength + generatedTokens.Count);
+            var outputs = _llm.RunOptimizedStep(idsArray, kv, step, sequenceLength + generatedTokens.Count);
             
             var newKv = outputs.KvCache;
 
@@ -214,10 +210,9 @@ public sealed class AgentOrchestrator
                         response.Append(injectedText);
                         generatedTokens.AddRange(injectedTokens);
                         
-                        var injectTensor = new DenseTensor<int>(new[] { 1, injectedTokens.Length });
-                        for (int i = 0; i < injectedTokens.Length; i++) injectTensor[0, i] = injectedTokens[i];
+                        var injectArray = injectedTokens.Select(token => (long)token).ToArray();
                         
-                        var injectOutputs = _llm.RunOptimizedStep(injectTensor, newKv, step, sequenceLength + generatedTokens.Count);
+                        var injectOutputs = _llm.RunOptimizedStep(injectArray, newKv, step, sequenceLength + generatedTokens.Count);
                         outputs.Dispose();
                         outputs = injectOutputs;
                         newKv = injectOutputs.KvCache;
@@ -229,8 +224,7 @@ public sealed class AgentOrchestrator
 
             if (IsStopToken(nextId, config) || IsStopSequence(response.ToString(), config)) break;
 
-            idsTensor = new DenseTensor<int>(new[] { 1, 1 });
-            idsTensor[0, 0] = nextId;
+            idsArray = [(long)nextId];
             
             kv?.Dispose();
             kv = newKv;

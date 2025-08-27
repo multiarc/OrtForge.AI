@@ -52,36 +52,17 @@ public sealed class LlamaSession : IDisposable
         }
     }
     
-    
     private static TensorElementType GetTensorElementType(Type type)
     {
         if (type == typeof(float)) return TensorElementType.Float;
         if (type == typeof(Half)) return TensorElementType.Float16;
+        if (type.Name == "Float16" || type.FullName?.Contains("OnnxRuntime.Float16") == true) 
+            return TensorElementType.Float16;
         if (type == typeof(byte)) return TensorElementType.UInt8;
         if (type == typeof(sbyte)) return TensorElementType.Int8;
         if (type == typeof(int)) return TensorElementType.Int32;
         if (type == typeof(long)) return TensorElementType.Int64;
         return TensorElementType.Float;
-    }
-    
-    private static long[] ConvertToLongArray(ReadOnlySpan<int> dimensions)
-    {
-        var result = new long[dimensions.Length];
-        for (int i = 0; i < dimensions.Length; i++)
-        {
-            result[i] = dimensions[i];
-        }
-        return result;
-    }
-    
-    private static int[] ConvertToIntArray(ReadOnlySpan<long> dimensions)
-    {
-        var result = new int[dimensions.Length];
-        for (int i = 0; i < dimensions.Length; i++)
-        {
-            result[i] = (int)dimensions[i];
-        }
-        return result;
     }
 
     public sealed class KvState : IDisposable
@@ -128,29 +109,29 @@ public sealed class LlamaSession : IDisposable
         }
         
         public static StepInputs Create(
-            DenseTensor<int> inputIds,
+            long[] inputIds,
             KvState kv,
-            DenseTensor<long>? positionIds = null,
-            DenseTensor<int>? attentionMask = null)
+            long[]? positionIds = null,
+            long[]? attentionMask = null)
         {
             var inputIdsOrt = OrtValue.CreateTensorValueFromMemory(
-                inputIds.Buffer.ToArray(), 
-                ConvertToLongArray(inputIds.Dimensions));
+                inputIds, 
+                [1, inputIds.Length]);
                 
             OrtValue? positionIdsOrt = null;
             if (positionIds != null)
             {
                 positionIdsOrt = OrtValue.CreateTensorValueFromMemory(
-                    positionIds.Buffer.ToArray(),
-                    ConvertToLongArray(positionIds.Dimensions));
+                    positionIds,
+                    [1, positionIds.Length]);
             }
             
             OrtValue? attentionMaskOrt = null;
             if (attentionMask != null)
             {
                 attentionMaskOrt = OrtValue.CreateTensorValueFromMemory(
-                    attentionMask.Buffer.ToArray(),
-                    ConvertToLongArray(attentionMask.Dimensions));
+                    attentionMask,
+                    [1, attentionMask.Length]);
             }
             
             return new StepInputs(inputIdsOrt, kv, positionIdsOrt, attentionMaskOrt);
@@ -167,24 +148,42 @@ public sealed class LlamaSession : IDisposable
             KvCache?.Dispose();
         }
         
-        public Span<float> GetLogitsSpan() => Logits.GetTensorMutableDataAsSpan<float>();
+        public Span<float> GetLogitsSpan()
+        {
+            var typeInfo = Logits.GetTensorTypeAndShape();
+            return typeInfo.ElementDataType switch
+            {
+                TensorElementType.Float => Logits.GetTensorMutableDataAsSpan<float>(),
+                TensorElementType.Float16 => throw new NotSupportedException("Use GetLogitsArray() for Float16 tensors"),
+                _ => throw new NotSupportedException($"Unsupported tensor element type: {typeInfo.ElementDataType}")
+            };
+        }
         
         public float[] GetLogitsArray()
         {
-            var span = GetLogitsSpan();
-            var array = new float[span.Length];
-            span.CopyTo(array);
-            return array;
-        }
-        
-        public DenseTensor<float> GetLogitsTensor()
-        {
-            var span = GetLogitsSpan();
-            var shape = Logits.GetTensorTypeAndShape().Shape;
-            var dims = ConvertToIntArray(shape);
-            var array = new float[span.Length];
-            span.CopyTo(array);
-            return new DenseTensor<float>(array, dims);
+            var typeInfo = Logits.GetTensorTypeAndShape();
+            switch (typeInfo.ElementDataType)
+            {
+                case TensorElementType.Float:
+                    {
+                        var span = Logits.GetTensorMutableDataAsSpan<float>();
+                        var array = new float[span.Length];
+                        span.CopyTo(array);
+                        return array;
+                    }
+                case TensorElementType.Float16:
+                    {
+                        var halfSpan = Logits.GetTensorMutableDataAsSpan<Half>();
+                        var array = new float[halfSpan.Length];
+                        for (int i = 0; i < halfSpan.Length; i++)
+                        {
+                            array[i] = (float)halfSpan[i];
+                        }
+                        return array;
+                    }
+                default:
+                    throw new NotSupportedException($"Unsupported tensor element type: {typeInfo.ElementDataType}");
+            }
         }
     }
 
@@ -193,9 +192,16 @@ public sealed class LlamaSession : IDisposable
         var inputMetadataKeys = _session.InputMetadata.Keys;
         var outputMetadata = _session.OutputMetadata;
         
-        var maxInputs = 3 + (inputs.Kv?.Tensors.Count ?? 0);
-        var inputValues = new List<OrtValue>(maxInputs);
-        var inputNamesList = new List<string>(maxInputs);
+        // Get input dimensions used throughout the method
+        var inputShape = inputs.InputIds.GetTensorTypeAndShape().Shape;
+        var batchSize = inputShape[0];
+        var sequenceLength = inputShape[1];
+        
+        // Debug: Print all expected inputs
+        Console.WriteLine($"Expected inputs: {string.Join(", ", _session.InputMetadata.Keys)}");
+        
+        var inputValues = new List<OrtValue>();
+        var inputNamesList = new List<string>();
         var outputCount = outputMetadata.Count;
         var outputNames = new List<string>(outputCount);
         var outputValues = new List<OrtValue>(outputCount);
@@ -254,6 +260,9 @@ public sealed class LlamaSession : IDisposable
             inputNamesList.Add("attention_mask");
         }
 
+        // Handle KV cache inputs - create empty tensors for missing ones on first step
+        var providedKvInputs = new HashSet<string>();
+        
         if (inputs.Kv != null && inputs.Kv.Tensors.Count > 0)
         {
             foreach (var kv in inputs.Kv.Tensors)
@@ -278,21 +287,72 @@ public sealed class LlamaSession : IDisposable
 
                 inputValues.Add(kv.Value);
                 inputNamesList.Add(targetName);
+                providedKvInputs.Add(targetName);
             }
         }
-
+        
+        // Create empty KV cache tensors for any missing KV inputs (first step)
+        
+        foreach (var inputName in inputMetadataKeys)
+        {
+            if ((inputName.Contains("past") || inputName.Contains("key") || inputName.Contains("value")) && 
+                !providedKvInputs.Contains(inputName) &&
+                inputName != "input_ids" && inputName != "position_ids" && inputName != "attention_mask")
+            {
+                Console.WriteLine($"Creating empty KV tensor for missing input: {inputName}");
+                var inputMeta = _session.InputMetadata[inputName];
+                var kvDims = inputMeta.Dimensions.ToArray();
+                
+                // Replace symbolic dimensions
+                for (int i = 0; i < kvDims.Length; i++)
+                {
+                    if (kvDims[i] < 0)
+                    {
+                        if (i == 0) kvDims[i] = (int)batchSize;
+                        else if (i == 2) kvDims[i] = 0; // Sequence length starts at 0 for empty cache
+                    }
+                }
+                
+                var longDims = kvDims.Select(d => (long)d).ToArray();
+                var emptyKvTensor = OrtValue.CreateAllocatedTensorValue(
+                    OrtAllocator.DefaultInstance, 
+                    GetTensorElementType(inputMeta.ElementType), 
+                    longDims);
+                
+                inputValues.Add(emptyKvTensor);
+                inputNamesList.Add(inputName);
+            }
+        }
+        
         foreach (var output in outputMetadata)
         {
             outputNames.Add(output.Key);
+            
             if (output.Key.ToLower().Contains("logits"))
             {
-                var longDims = ConvertToLongArray(output.Value.Dimensions);
-                var logitsTensor = OrtValue.CreateAllocatedTensorValue(OrtAllocator.DefaultInstance, TensorElementType.Float, longDims);
+                var vocabSize = output.Value.Dimensions[^1];
+                
+                var tensorElementType = GetTensorElementType(output.Value.ElementType);
+                Console.WriteLine($"Output '{output.Key}' mapped to {tensorElementType}");
+                
+                var logitsTensor = OrtValue.CreateAllocatedTensorValue(
+                    OrtAllocator.DefaultInstance, 
+                    tensorElementType, 
+                    [batchSize, sequenceLength, vocabSize]);
                 outputValues.Add(logitsTensor);
             }
             else
             {
-                var longDims = ConvertToLongArray(output.Value.Dimensions);
+                var kvDims = output.Value.Dimensions.ToArray();
+                for (int i = 0; i < kvDims.Length; i++)
+                {
+                    if (kvDims[i] < 0) // Replace symbolic dimensions
+                    {
+                        if (i == 0) kvDims[i] = (int)batchSize;
+                        else if (i == 2) kvDims[i] = (int)sequenceLength; // KV cache sequence dimension
+                    }
+                }
+                var longDims = kvDims.Select(d => (long)d).ToArray();
                 var kvTensor = GetOrCreateKvTensor(output.Key, longDims, GetTensorElementType(output.Value.ElementType));
                 outputValues.Add(kvTensor);
             }
@@ -352,16 +412,16 @@ public sealed class LlamaSession : IDisposable
         return RunStepAsync(inputs, CancellationToken.None).GetAwaiter().GetResult();
     }
 
-    public async Task<StepOutputs> RunOptimizedStepAsync(DenseTensor<int> inputIds, KvState kv, int currentStep, int sequenceLength, CancellationToken cancellationToken = default)
+    public async Task<StepOutputs> RunOptimizedStepAsync(long[] inputIds, KvState kv, int currentStep, int sequenceLength, CancellationToken cancellationToken = default)
     {
         var positionIds = LlamaOptimizations.CreateOptimalPositionIds(sequenceLength, currentStep, ModelName);
-        var attentionMask = currentStep == 0 ? LlamaOptimizations.CreateOptimalAttentionMask(inputIds.Dimensions[1], ModelName) : null;
+        var attentionMask = currentStep == 0 ? LlamaOptimizations.CreateOptimalAttentionMask(inputIds.Length, ModelName) : null;
         
         using var inputs = StepInputs.Create(inputIds, kv, positionIds, attentionMask);
         return await RunStepAsync(inputs, cancellationToken);
     }
 
-    public StepOutputs RunOptimizedStep(DenseTensor<int> inputIds, KvState kv, int currentStep, int sequenceLength)
+    public StepOutputs RunOptimizedStep(long[] inputIds, KvState kv, int currentStep, int sequenceLength)
     {
         return RunOptimizedStepAsync(inputIds, kv, currentStep, sequenceLength, CancellationToken.None).GetAwaiter().GetResult();
     }

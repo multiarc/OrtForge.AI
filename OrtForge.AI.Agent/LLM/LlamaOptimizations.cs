@@ -1,4 +1,3 @@
-using Microsoft.ML.OnnxRuntime.Tensors;
 using OrtForge.AI.Agent.Generation;
 
 namespace OrtForge.AI.Agent.LLM;
@@ -40,7 +39,7 @@ public static class LlamaOptimizations
         };
     }
 
-    public static DenseTensor<long>? CreateOptimalPositionIds(int sequenceLength, int currentStep, string modelName)
+    public static long[]? CreateOptimalPositionIds(int sequenceLength, int currentStep, string modelName)
     {
         var modelKey = GetModelKey(modelName);
         
@@ -49,12 +48,10 @@ public static class LlamaOptimizations
             return null;
         }
 
-        var positionIds = new DenseTensor<long>(new[] { 1, 1 });
-        positionIds[0, 0] = sequenceLength + currentStep;
-        return positionIds;
+        return [sequenceLength + currentStep];
     }
 
-    public static DenseTensor<int>? CreateOptimalAttentionMask(int totalSequenceLength, string modelName)
+    public static long[]? CreateOptimalAttentionMask(int totalSequenceLength, string modelName)
     {
         var modelKey = GetModelKey(modelName);
         
@@ -63,11 +60,8 @@ public static class LlamaOptimizations
             return null;
         }
 
-        var attentionMask = new DenseTensor<int>(new[] { 1, totalSequenceLength });
-        for (int i = 0; i < totalSequenceLength; i++)
-        {
-            attentionMask[0, i] = 1;
-        }
+        var attentionMask = new long[totalSequenceLength];
+        Array.Fill(attentionMask, 1L);
         return attentionMask;
     }
 
