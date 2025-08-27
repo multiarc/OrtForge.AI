@@ -10,7 +10,7 @@ public sealed class ConversationSession : IDisposable
     private readonly TokenizerService _tokenizer;
     private readonly List<(string role, string content)> _history = new();
     private KvState? _kvState;
-    private int _systemPromptTokenCount = 0;
+
     private bool _isSystemPromptProcessed = false;
     
     public string SessionId { get; } = Guid.NewGuid().ToString("N")[..8];
@@ -44,7 +44,6 @@ public sealed class ConversationSession : IDisposable
         var systemTokens = _tokenizer.EncodeToIds(systemPrompt);
         
         _kvState = new KvState();
-        _systemPromptTokenCount = systemTokens.Length;
         
 
         using var inputIds = CreateOrtValueFromIds(systemTokens.Select(id => (long)id).ToArray());
@@ -54,7 +53,6 @@ public sealed class ConversationSession : IDisposable
         
 
         _kvState = outputs.KvCache;
-        _kvState.UpdateSequenceLength(systemTokens.Length);
         _isSystemPromptProcessed = true;
         
         outputs.Dispose();
@@ -90,7 +88,6 @@ public sealed class ConversationSession : IDisposable
             
             var outputs = await llmSession.RunStepAsync(messageInputs);
             _kvState = outputs.KvCache;
-            _kvState.UpdateSequenceLength(messageTokens.Length);
             outputs.Dispose();
         }
         

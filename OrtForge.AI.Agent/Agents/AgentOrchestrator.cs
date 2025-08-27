@@ -82,7 +82,7 @@ public sealed class AgentOrchestrator
         }
         var response = new StringBuilder();
         var generatedTokens = new List<int>();
-        var sequenceLength = idsArray.Length;
+        var currentSeqLength = session != null ? kv.AccumulatedSequenceLength : idsArray.Length;
         var toolState = new ToolCallState();
 
         int GetNextSample(LlamaSession.StepOutputs outputs, int vocab)
@@ -127,7 +127,10 @@ public sealed class AgentOrchestrator
             // First step: use full prompt, subsequent steps: use only the last generated token
             var currentInput = step == 0 ? idsArray : new long[] { generatedTokens[^1] };
             
-            var totalSeqLen = sequenceLength + generatedTokens.Count;
+            // Update sequence length for the tokens we're about to process
+            var tokensToProcess = currentInput.Length;
+            var totalSeqLen = currentSeqLength + tokensToProcess;
+            
             var outputs = await _llm.RunOptimizedStep(currentInput, kv, step, totalSeqLen);
             var newKv = outputs.KvCache;
 
@@ -173,7 +176,9 @@ public sealed class AgentOrchestrator
                         
                         var injectArray = injectedTokens.Select(token => (long)token).ToArray();
                         
-                        var injectOutputs = await _llm.RunOptimizedStep(injectArray, newKv, step, sequenceLength + generatedTokens.Count);
+                        var injectSeqLen = totalSeqLen + injectArray.Length;
+                        var injectOutputs = await _llm.RunOptimizedStep(injectArray, newKv, step, injectSeqLen);
+                        currentSeqLength = injectSeqLen;
                         outputs.Dispose();
                         outputs = injectOutputs;
                         newKv = injectOutputs.KvCache;
@@ -184,13 +189,13 @@ public sealed class AgentOrchestrator
             if (IsStopToken(nextId, config) || IsStopSequence(response.ToString(), config)) break;
 
             kv = newKv;
+            currentSeqLength = totalSeqLen; // Update our sequence length tracker
             outputs.Dispose();
         }
         
         if (session != null)
         {
             session.UpdateKvState(kv);
-            await session.AddMessageAsync("assistant", response.ToString(), null);
         }
         else
         {
