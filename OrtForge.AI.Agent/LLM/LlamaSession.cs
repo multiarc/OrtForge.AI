@@ -313,11 +313,15 @@ public sealed class LlamaSession : IDisposable
                     if (kvDims[i] < 0) // Replace symbolic dimensions
                     {
                         if (i == 0) kvDims[i] = (int)batchSize;
-                        else if (i == 2) kvDims[i] = (int)sequenceLength; // KV cache sequence dimension
+                        else if (i == 2) kvDims[i] = inputs.Kv.AccumulatedSequenceLength + (int)sequenceLength; // Total KV sequence length
                     }
                 }
                 var longDims = kvDims.Select(d => (long)d).ToArray();
-                var kvTensor = inputs.Kv.KvArena.GetOrCreateKvTensor(output.Key, longDims, GetTensorElementType(output.Value.ElementType));
+                // Direct allocation - let ONNX Runtime handle memory pooling efficiently
+                var kvTensor = OrtValue.CreateAllocatedTensorValue(
+                    OrtAllocator.DefaultInstance, 
+                    GetTensorElementType(output.Value.ElementType), 
+                    longDims);
                 outputValues.Add(kvTensor);
             }
         }
@@ -339,7 +343,8 @@ public sealed class LlamaSession : IDisposable
             throw new InvalidOperationException($"Error running the model: {ex.Message}", ex);
         }
 
-        var newKv = new KvState(inputs.Kv.KvArena);
+        // Create new KvState with updated sequence length
+        var newKv = new KvState(inputs.Kv.AccumulatedSequenceLength + (int)sequenceLength);
         OrtValue? logits = null;
         
         for (int i = 0; i < outputNamesArray.Length; i++)
