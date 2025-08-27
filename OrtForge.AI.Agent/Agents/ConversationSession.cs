@@ -46,10 +46,9 @@ public sealed class ConversationSession : IDisposable
         _kvState = new KvState();
         
 
-        using var inputIds = CreateOrtValueFromIds(systemTokens.Select(id => (long)id).ToArray());
-        var systemInputs = new LlamaSession.StepInputs(inputIds, _kvState, null, null);
+        var inputIds = systemTokens.Select(id => (long)id).ToArray();
         
-        var outputs = await llmSession.RunStepAsync(systemInputs);
+        var outputs = await llmSession.RunOptimizedStep(inputIds, _kvState, 0, inputIds.Length);
         
 
         _kvState = outputs.KvCache;
@@ -83,10 +82,11 @@ public sealed class ConversationSession : IDisposable
 
         if (llmSession != null)
         {
-            using var inputIds = CreateOrtValueFromIds(messageTokens.Select(id => (long)id).ToArray());
-            var messageInputs = new LlamaSession.StepInputs(inputIds, _kvState, null, null);
+            var inputIds = messageTokens.Select(id => (long)id).ToArray();
+            var currentSeqLength = _kvState.AccumulatedSequenceLength;
+            var totalSeqLength = currentSeqLength + inputIds.Length;
             
-            var outputs = await llmSession.RunStepAsync(messageInputs);
+            var outputs = await llmSession.RunOptimizedStep(inputIds, _kvState, 0, totalSeqLength);
             _kvState = outputs.KvCache;
             outputs.Dispose();
         }
@@ -103,6 +103,11 @@ public sealed class ConversationSession : IDisposable
     public void UpdateKvState(KvState newKvState)
     {
         _kvState = newKvState;
+    }
+
+    public void AddToHistory(string role, string content)
+    {
+        _history.Add((role, content));
     }
 
 
@@ -156,10 +161,7 @@ public sealed class ConversationSession : IDisposable
     }
 
 
-    private static Microsoft.ML.OnnxRuntime.OrtValue CreateOrtValueFromIds(long[] ids)
-    {
-        return Microsoft.ML.OnnxRuntime.OrtValue.CreateTensorValueFromMemory<long>(ids, new long[] { 1, ids.Length });
-    }
+
 
     public void Dispose()
     {

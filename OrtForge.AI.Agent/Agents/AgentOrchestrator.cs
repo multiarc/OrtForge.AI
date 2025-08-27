@@ -196,6 +196,7 @@ public sealed class AgentOrchestrator
         if (session != null)
         {
             session.UpdateKvState(kv);
+            session.AddToHistory("assistant", response.ToString());
         }
         else
         {
