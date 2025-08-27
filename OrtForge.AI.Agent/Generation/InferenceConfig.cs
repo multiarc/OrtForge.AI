@@ -17,12 +17,21 @@ public sealed record InferenceConfig
     public HashSet<int> StopTokenIds { get; init; } = new() { 0, 2 };
     public string[] StopSequences { get; init; } = Array.Empty<string>();
     
-    public static InferenceConfig Default => new();
+    public static InferenceConfig Default => new()
+    {
+        Temperature = 0.7,
+        TopK = 40,
+        TopP = 0.95,
+        RepetitionPenalty = 1.1,  // FIXED: Add repetition penalty to prevent loops
+        FrequencyPenalty = 0.1,   // FIXED: Add frequency penalty to reduce repetition
+        PresencePenalty = 0.1     // FIXED: Add presence penalty to encourage diversity
+    };
     
     public static InferenceConfig Greedy => new()
     {
         UseGreedy = true,
-        Temperature = 0.0
+        Temperature = 0.0,
+        RepetitionPenalty = 1.05  // Even for greedy, prevent repetition
     };
     
     public static InferenceConfig Creative => new()
@@ -30,7 +39,9 @@ public sealed record InferenceConfig
         Temperature = 0.8,
         TopK = 50,
         TopP = 0.9,
-        RepetitionPenalty = 1.1
+        RepetitionPenalty = 1.15,
+        FrequencyPenalty = 0.2,
+        PresencePenalty = 0.2
     };
     
     public static InferenceConfig Precise => new()
@@ -38,6 +49,8 @@ public sealed record InferenceConfig
         Temperature = 0.3,
         TopK = 20,
         TopP = 0.8,
-        RepetitionPenalty = 1.05
+        RepetitionPenalty = 1.1,
+        FrequencyPenalty = 0.15,
+        PresencePenalty = 0.1
     };
 }

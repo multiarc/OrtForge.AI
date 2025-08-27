@@ -58,7 +58,10 @@ public sealed class AgentOrchestrator
         }
 
         var prompt = BuildPrompt(history, user, retrieved, toolExecutor != null);
+        Console.WriteLine($"DEBUG: Built prompt ({prompt.Length} chars):\n{prompt}\n--- END PROMPT ---");
+        
         var inputIds = _tokenizer.EncodeToIds(prompt);
+        Console.WriteLine($"DEBUG: Tokenized to {inputIds.Length} tokens: [{string.Join(", ", inputIds.Take(10))}...]");
 
         var idsArray = inputIds.Select(id => (long)id).ToArray();
 
@@ -81,22 +84,64 @@ public sealed class AgentOrchestrator
                 var seqLen = (int)logitsShape[1];
                 var vocabSize = (int)logitsShape[2];
                 
-                // Take logits for the last token position: span[(seqLen-1) * vocab : seqLen * vocab]
-                var lastTokenStart = (seqLen - 1) * vocab;
-                logitsForSampling = span.Slice(lastTokenStart, vocab);
+                // FIXED: Use vocabSize consistently for calculations
+                // Take logits for the last token position: span[(seqLen-1) * vocabSize : seqLen * vocabSize]
+                var lastTokenStart = (seqLen - 1) * vocabSize;
+                logitsForSampling = span.Slice(lastTokenStart, vocabSize);
                 
-                // Using last token position for multi-token logits
+                Console.WriteLine($"DEBUG: Sampling from logits shape [{batchSize}, {seqLen}, {vocabSize}], using slice [{lastTokenStart}:{lastTokenStart + vocabSize}]");
+            }
+            else if (logitsShape.Length == 2) // [batch, vocab] - generation step
+            {
+                // For single token generation, logits are already [batch, vocab]
+                var batchSize = (int)logitsShape[0];
+                var vocabSize = (int)logitsShape[1];
+                
+                // Take logits for batch 0
+                logitsForSampling = span.Slice(0, vocabSize);
+                
+                Console.WriteLine($"DEBUG: Sampling from logits shape [{batchSize}, {vocabSize}], using full vocab span");
             }
             else
             {
                 // Fallback: assume span is already the right size [vocab]
                 logitsForSampling = span;
+                Console.WriteLine($"DEBUG: Using fallback logits sampling, span length: {span.Length}");
             }
             
-            // Use normal sampling with temperature to break deterministic loops
+            // Check for NaN/Inf values in logits that would cause bad sampling
+            var hasNan = false;
+            var hasInf = false;
+            for (int i = 0; i < logitsForSampling.Length; i++)
+            {
+                if (float.IsNaN(logitsForSampling[i])) hasNan = true;
+                if (float.IsInfinity(logitsForSampling[i])) hasInf = true;
+            }
+            
+            if (hasNan || hasInf)
+            {
+                Console.WriteLine($"WARNING: Logits contain NaN: {hasNan}, Inf: {hasInf} - this will cause bad sampling!");
+            }
+            
+            // Debug: Check logits values for anomalies
+            var maxLogit = float.NegativeInfinity;
+            var minLogit = float.PositiveInfinity;
+            var sumLogits = 0.0f;
+            for (int i = 0; i < logitsForSampling.Length; i++)
+            {
+                var logit = logitsForSampling[i];
+                if (logit > maxLogit) maxLogit = logit;
+                if (logit < minLogit) minLogit = logit;
+                sumLogits += logit;
+            }
+            
+            Console.WriteLine($"DEBUG: Logits range [{minLogit:F3}, {maxLogit:F3}], avg: {sumLogits / logitsForSampling.Length:F3}");
             
             var previousTokensSpan = generatedTokens.Count > 0 ? generatedTokens.ToArray().AsSpan() : ReadOnlySpan<int>.Empty;
-            return Sampling.Sample(logitsForSampling, config, previousTokensSpan);
+            var sampledToken = Sampling.Sample(logitsForSampling, config, previousTokensSpan);
+            
+            Console.WriteLine($"DEBUG: Sampled token {sampledToken} from {logitsForSampling.Length} vocab options");
+            return sampledToken;
         }
         
         for (int step = 0; step < config.MaxTokens; step++)
@@ -116,6 +161,19 @@ public sealed class AgentOrchestrator
             generatedTokens.Add(nextId);
 
             var tokenText = _tokenizer.DecodeFromIds(new[] { nextId });
+            Console.WriteLine($"DEBUG: Generated token ID {nextId} -> '{tokenText}' (step {step})");
+            
+            // Check for immediate repetition (same token repeated)
+            if (generatedTokens.Count >= 3)
+            {
+                var recent = generatedTokens.TakeLast(3).ToArray();
+                if (recent[0] == recent[1] && recent[1] == recent[2])
+                {
+                    Console.WriteLine($"WARNING: Token {recent[0]} repeated 3 times in a row! Breaking to prevent infinite loop.");
+                    break;
+                }
+            }
+            
             response.Append(tokenText);
             
             if (toolExecutor != null)
@@ -189,36 +247,41 @@ public sealed class AgentOrchestrator
     internal static string BuildPrompt(IReadOnlyList<(string role, string content)> history, string user, IReadOnlyList<string> retrieved, bool enableTools = false)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("<|system|>You are a helpful assistant. Use context when relevant and cite sources.");
+        
+        // Use a simpler, more compatible prompt format
+        sb.AppendLine("You are a helpful assistant. Use context when relevant and cite sources.");
         
         if (enableTools)
         {
             sb.AppendLine();
             sb.AppendLine("When you need to use a tool, format it as:");
-            sb.AppendLine("<|tool_call|>");
+            sb.AppendLine("TOOL_CALL");
             sb.AppendLine("name: tool_name");
             sb.AppendLine("args: tool_arguments");
-            sb.AppendLine("<|/tool_call|>");
+            sb.AppendLine("END_TOOL_CALL");
             sb.AppendLine();
-            sb.AppendLine("The tool result will be provided in <|tool_result|>...<|/tool_result|> tags.");
+            sb.AppendLine("The tool result will be provided in TOOL_RESULT...END_TOOL_RESULT tags.");
         }
-        
-        sb.AppendLine("</s>");
         
         if (retrieved.Count > 0)
         {
-            sb.AppendLine("<|context|>");
-            foreach (var ctx in retrieved) sb.AppendLine(ctx);
-            sb.AppendLine("</context>");
+            sb.AppendLine();
+            sb.AppendLine("Context:");
+            foreach (var ctx in retrieved) 
+            {
+                sb.AppendLine($"- {ctx}");
+            }
+            sb.AppendLine();
         }
         
+        // Add conversation history in a simple format
         foreach (var (role, content) in history)
         {
-            sb.Append("<|").Append(role).Append("|>").Append(content).AppendLine("</s>");
+            sb.AppendLine($"{role.ToUpperInvariant()}: {content}");
         }
         
-        sb.Append("<|user|>").Append(user).AppendLine("</s>");
-        sb.Append("<|assistant|>");
+        sb.AppendLine($"USER: {user}");
+        sb.Append("ASSISTANT:");
         return sb.ToString();
     }
 }
