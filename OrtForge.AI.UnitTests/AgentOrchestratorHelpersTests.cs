@@ -15,16 +15,37 @@ public class AgentOrchestratorHelpersTests
         };
         var retrieved = new List<string> { "ctx1", "ctx2" };
         var prompt = AgentOrchestrator.BuildPrompt(history, "what?", retrieved, enableTools: false);
-        Assert.Contains("<|system|>", prompt);
-        Assert.Contains("<|context|>", prompt);
-        Assert.Contains("ctx1", prompt);
-        Assert.Contains("ctx2", prompt);
-        Assert.Contains("</context>", prompt);
-        Assert.Contains("<|user|>hi</s>", prompt);
-        Assert.Contains("<|assistant|>hello</s>", prompt);
-        Assert.Contains("<|user|>what?</s>", prompt);
-        Assert.Contains("<|assistant|>", prompt);
-        Assert.DoesNotContain("<|tool_call|>", prompt);
+        
+        // Check for proper Llama 3.1 chat template format
+        Assert.Contains("<|begin_of_text|>", prompt);
+        Assert.Contains("<|start_header_id|>system<|end_header_id|>", prompt);
+        
+        // Check for enhanced system prompt structure
+        Assert.Contains("## Core Instructions:", prompt);
+        Assert.Contains("**ONLY respond as the assistant**", prompt);
+        Assert.Contains("**Always format your response in markdown**", prompt);
+        Assert.Contains("**Base your answers primarily on the provided context**", prompt);
+        
+        // Check for context section
+        Assert.Contains("## Available Context:", prompt);
+        Assert.Contains("**Source 1:**", prompt);
+        Assert.Contains("> ctx1", prompt);
+        Assert.Contains("**Source 2:**", prompt);
+        Assert.Contains("> ctx2", prompt);
+        
+        // Check for conversation history in proper Llama 3.1 format
+        Assert.Contains("<|start_header_id|>user<|end_header_id|>", prompt);
+        Assert.Contains("hi", prompt);
+        Assert.Contains("<|start_header_id|>assistant<|end_header_id|>", prompt);
+        Assert.Contains("hello", prompt);
+        
+        // Check for current user message and assistant start
+        Assert.Contains("what?", prompt);
+        Assert.Contains("<|eot_id|>", prompt);
+        
+        // Should not contain tool instructions when tools are disabled
+        Assert.DoesNotContain("## Tool Usage:", prompt);
+        Assert.DoesNotContain("TOOL_CALL", prompt);
     }
 
     [Fact]
@@ -33,13 +54,29 @@ public class AgentOrchestratorHelpersTests
         var history = new List<(string role, string content)>();
         var retrieved = new List<string>();
         var prompt = AgentOrchestrator.BuildPrompt(history, "test", retrieved, enableTools: true);
-        Assert.Contains("<|system|>", prompt);
+        
+        // Check for proper Llama 3.1 chat template format
+        Assert.Contains("<|begin_of_text|>", prompt);
+        Assert.Contains("<|start_header_id|>system<|end_header_id|>", prompt);
+        
+        // Check for system prompt
+        Assert.Contains("## Core Instructions:", prompt);
+        Assert.Contains("**ONLY respond as the assistant**", prompt);
+        
+        // Check for tool instructions section
+        Assert.Contains("## Tool Usage:", prompt);
         Assert.Contains("When you need to use a tool", prompt);
-        Assert.Contains("<|tool_call|>", prompt);
+        Assert.Contains("TOOL_CALL", prompt);
         Assert.Contains("name: tool_name", prompt);
         Assert.Contains("args: tool_arguments", prompt);
-        Assert.Contains("<|/tool_call|>", prompt);
-        Assert.Contains("<|tool_result|>", prompt);
+        Assert.Contains("END_TOOL_CALL", prompt);
+        Assert.Contains("TOOL_RESULT...END_TOOL_RESULT", prompt);
+        
+        // Check for proper section endings and user message format
+        Assert.Contains("<|eot_id|>", prompt);
+        Assert.Contains("<|start_header_id|>user<|end_header_id|>", prompt);
+        Assert.Contains("test", prompt);
+        Assert.Contains("<|start_header_id|>assistant<|end_header_id|>", prompt);
     }
 
     [Fact]

@@ -127,13 +127,7 @@ public sealed class LlamaSession : IDisposable
                             array[i] = (float)halfSpan[i];
                         }
                         
-                        // Debug: Check for NaN/Inf values in logits
-                        var nanCount = array.Count(f => float.IsNaN(f));
-                        var infCount = array.Count(f => float.IsInfinity(f));
-                        if (nanCount > 0 || infCount > 0)
-                        {
-                            Console.WriteLine($"WARNING: Logits contain {nanCount} NaN and {infCount} Inf values");
-                        }
+
                         
                         return array;
                     }
@@ -163,7 +157,10 @@ public sealed class LlamaSession : IDisposable
         // Get input dimensions used throughout the method
         var inputShape = inputs.InputIds.GetTensorTypeAndShape().Shape;
         var batchSize = inputShape[0];
-        var sequenceLength = inputShape[1];
+        var currentInputLength = inputShape[1];  // Length of current input tokens
+        
+        // Calculate total sequence length for KV cache allocation
+        var totalSequenceLength = inputs.Kv.AccumulatedSequenceLength + currentInputLength;
         
 
         
@@ -216,10 +213,10 @@ public sealed class LlamaSession : IDisposable
             }
             else
             {
-                // Create default attention mask (all 1s)
-                var defaultAttentionMask = new long[sequenceLength];
+                // Create default attention mask (all 1s) - must match total sequence length
+                var defaultAttentionMask = new long[totalSequenceLength];
                 Array.Fill(defaultAttentionMask, 1L);
-                var attentionMaskOrt = OrtValue.CreateTensorValueFromMemory(defaultAttentionMask, [1, sequenceLength]);
+                var attentionMaskOrt = OrtValue.CreateTensorValueFromMemory(defaultAttentionMask, [1, totalSequenceLength]);
                 inputValues.Add(attentionMaskOrt);
             }
             inputNamesList.Add("attention_mask");
@@ -250,8 +247,7 @@ public sealed class LlamaSession : IDisposable
                 
                 if (targetName == null) continue;
 
-                // Debug: Log input tensor shapes
-                var kvTensorShape = kv.Value.GetTensorTypeAndShape().Shape;
+
                 
                 inputValues.Add(kv.Value);
                 inputNamesList.Add(targetName);
@@ -307,7 +303,7 @@ public sealed class LlamaSession : IDisposable
                 var logitsTensor = OrtValue.CreateAllocatedTensorValue(
                     OrtAllocator.DefaultInstance, 
                     tensorElementType, 
-                    [batchSize, sequenceLength, vocabSize]);
+                    [batchSize, currentInputLength, vocabSize]);
                 outputValues.Add(logitsTensor);
             }
             else
@@ -322,28 +318,15 @@ public sealed class LlamaSession : IDisposable
                         {
                             if (inputs.Kv.Tensors.Count == 0)
                             {
-                                // First step (prefill) - use input sequence length
-                                kvDims[i] = (int)sequenceLength;
+                                // First step (prefill) - use current input length
+                                kvDims[i] = (int)currentInputLength;
 
                             }
                             else
                             {
-                                // Subsequent steps (generation) - model expects output KV to match input KV size
-                                // The model handles token appending internally
-                                var firstKvTensor = inputs.Kv.Tensors.Values.FirstOrDefault();
-                                if (firstKvTensor != null)
-                                {
-                                    var inputKvShape = firstKvTensor.GetTensorTypeAndShape().Shape;
-                                    var inputKvSeqLen = inputKvShape[2]; // Use same size as input
-                                    kvDims[i] = (int)inputKvSeqLen;
-
-                                }
-                                else
-                                {
-                                    // Fallback 
-                                    kvDims[i] = inputs.Kv.AccumulatedSequenceLength;
-
-                                }
+                                // FIXED: For subsequent steps, KV cache grows with each new token
+                                // Output KV cache should have total accumulated sequence length
+                                kvDims[i] = (int)totalSequenceLength;
                             }
                         }
                     }
@@ -380,7 +363,7 @@ public sealed class LlamaSession : IDisposable
 
         // Create new KvState with updated sequence length
         // Always increment the accumulated length by the tokens we just processed
-        var newAccumulatedLength = inputs.Kv.AccumulatedSequenceLength + (int)sequenceLength;
+        var newAccumulatedLength = (int)totalSequenceLength;
         var newKv = new KvState(newAccumulatedLength);
 
         OrtValue? logits = null;
@@ -414,8 +397,8 @@ public sealed class LlamaSession : IDisposable
     public async Task<StepOutputs> RunOptimizedStepAsync(long[] inputIds, KvState kv, int currentStep, int sequenceLength, CancellationToken cancellationToken = default)
     {
         var positionIds = LlamaOptimizations.CreateOptimalPositionIds(sequenceLength, currentStep, ModelName);
-        // Always provide attention mask since model requires it - must match current input length for KV cache
-        var attentionMask = LlamaOptimizations.CreateOptimalAttentionMask(inputIds.Length, ModelName);
+        // CRITICAL FIX: Use total sequence length for attention mask, not just current input length
+        var attentionMask = LlamaOptimizations.CreateOptimalAttentionMask(sequenceLength, ModelName);
         
         using var inputs = StepInputs.Create(inputIds, kv, positionIds, attentionMask);
         return await RunStepAsync(inputs, cancellationToken);

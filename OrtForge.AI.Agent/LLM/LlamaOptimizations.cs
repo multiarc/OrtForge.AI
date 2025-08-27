@@ -56,7 +56,6 @@ public static class LlamaOptimizations
             {
                 positionIds[i] = i;
             }
-            Console.WriteLine($"DEBUG: Step {currentStep}, Position IDs: [{string.Join(",", positionIds)}]");
             return positionIds;
         }
         else
@@ -64,7 +63,6 @@ public static class LlamaOptimizations
             // FIXED: For subsequent steps, the position ID should be the current sequence length
             // The sequenceLength parameter already includes the step count
             var posId = new long[] { sequenceLength - 1 };
-            Console.WriteLine($"DEBUG: Step {currentStep}, Position ID: [{posId[0]}]");
             return posId;
         }
     }

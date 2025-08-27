@@ -58,10 +58,7 @@ public sealed class AgentOrchestrator
         }
 
         var prompt = BuildPrompt(history, user, retrieved, toolExecutor != null);
-        Console.WriteLine($"DEBUG: Built prompt ({prompt.Length} chars):\n{prompt}\n--- END PROMPT ---");
-        
         var inputIds = _tokenizer.EncodeToIds(prompt);
-        Console.WriteLine($"DEBUG: Tokenized to {inputIds.Length} tokens: [{string.Join(", ", inputIds.Take(10))}...]");
 
         var idsArray = inputIds.Select(id => (long)id).ToArray();
 
@@ -88,8 +85,6 @@ public sealed class AgentOrchestrator
                 // Take logits for the last token position: span[(seqLen-1) * vocabSize : seqLen * vocabSize]
                 var lastTokenStart = (seqLen - 1) * vocabSize;
                 logitsForSampling = span.Slice(lastTokenStart, vocabSize);
-                
-                Console.WriteLine($"DEBUG: Sampling from logits shape [{batchSize}, {seqLen}, {vocabSize}], using slice [{lastTokenStart}:{lastTokenStart + vocabSize}]");
             }
             else if (logitsShape.Length == 2) // [batch, vocab] - generation step
             {
@@ -99,49 +94,15 @@ public sealed class AgentOrchestrator
                 
                 // Take logits for batch 0
                 logitsForSampling = span.Slice(0, vocabSize);
-                
-                Console.WriteLine($"DEBUG: Sampling from logits shape [{batchSize}, {vocabSize}], using full vocab span");
             }
             else
             {
                 // Fallback: assume span is already the right size [vocab]
                 logitsForSampling = span;
-                Console.WriteLine($"DEBUG: Using fallback logits sampling, span length: {span.Length}");
             }
-            
-            // Check for NaN/Inf values in logits that would cause bad sampling
-            var hasNan = false;
-            var hasInf = false;
-            for (int i = 0; i < logitsForSampling.Length; i++)
-            {
-                if (float.IsNaN(logitsForSampling[i])) hasNan = true;
-                if (float.IsInfinity(logitsForSampling[i])) hasInf = true;
-            }
-            
-            if (hasNan || hasInf)
-            {
-                Console.WriteLine($"WARNING: Logits contain NaN: {hasNan}, Inf: {hasInf} - this will cause bad sampling!");
-            }
-            
-            // Debug: Check logits values for anomalies
-            var maxLogit = float.NegativeInfinity;
-            var minLogit = float.PositiveInfinity;
-            var sumLogits = 0.0f;
-            for (int i = 0; i < logitsForSampling.Length; i++)
-            {
-                var logit = logitsForSampling[i];
-                if (logit > maxLogit) maxLogit = logit;
-                if (logit < minLogit) minLogit = logit;
-                sumLogits += logit;
-            }
-            
-            Console.WriteLine($"DEBUG: Logits range [{minLogit:F3}, {maxLogit:F3}], avg: {sumLogits / logitsForSampling.Length:F3}");
             
             var previousTokensSpan = generatedTokens.Count > 0 ? generatedTokens.ToArray().AsSpan() : ReadOnlySpan<int>.Empty;
-            var sampledToken = Sampling.Sample(logitsForSampling, config, previousTokensSpan);
-            
-            Console.WriteLine($"DEBUG: Sampled token {sampledToken} from {logitsForSampling.Length} vocab options");
-            return sampledToken;
+            return Sampling.Sample(logitsForSampling, config, previousTokensSpan);
         }
         
         for (int step = 0; step < config.MaxTokens; step++)
@@ -149,8 +110,8 @@ public sealed class AgentOrchestrator
             // First step: use full prompt, subsequent steps: use only the last generated token
             var currentInput = step == 0 ? idsArray : new long[] { generatedTokens[^1] };
             
-            var outputs = await _llm.RunOptimizedStep(currentInput, kv, step, sequenceLength + generatedTokens.Count);
-            
+            var totalSeqLen = sequenceLength + generatedTokens.Count;
+            var outputs = await _llm.RunOptimizedStep(currentInput, kv, step, totalSeqLen);
             var newKv = outputs.KvCache;
 
             var logitsShape = outputs.Logits.GetTensorTypeAndShape().Shape;
@@ -161,7 +122,9 @@ public sealed class AgentOrchestrator
             generatedTokens.Add(nextId);
 
             var tokenText = _tokenizer.DecodeFromIds(new[] { nextId });
-            Console.WriteLine($"DEBUG: Generated token ID {nextId} -> '{tokenText}' (step {step})");
+            
+            // Stream token output to console immediately
+            Console.Write(tokenText);
             
             // Check for immediate repetition (same token repeated)
             if (generatedTokens.Count >= 3)
@@ -169,7 +132,6 @@ public sealed class AgentOrchestrator
                 var recent = generatedTokens.TakeLast(3).ToArray();
                 if (recent[0] == recent[1] && recent[1] == recent[2])
                 {
-                    Console.WriteLine($"WARNING: Token {recent[0]} repeated 3 times in a row! Breaking to prevent infinite loop.");
                     break;
                 }
             }
@@ -186,6 +148,9 @@ public sealed class AgentOrchestrator
                     var (injectedText, injectedTokens) = ExecuteToolCall(pendingCall, toolExecutor, toolState);
                     if (!string.IsNullOrEmpty(injectedText))
                     {
+                        // Stream injected text immediately as well
+                        Console.Write(injectedText);
+                        
                         response.Append(injectedText);
                         generatedTokens.AddRange(injectedTokens);
                         
@@ -206,6 +171,12 @@ public sealed class AgentOrchestrator
         }
         
         kv.Dispose(); // Clean up KV tensors
+
+        // Ensure we end with a newline for proper formatting
+        if (!response.ToString().EndsWith('\n'))
+        {
+            Console.WriteLine();
+        }
 
         return response.ToString();
     }
@@ -244,44 +215,160 @@ public sealed class AgentOrchestrator
         }
     }
 
-    internal static string BuildPrompt(IReadOnlyList<(string role, string content)> history, string user, IReadOnlyList<string> retrieved, bool enableTools = false)
+    internal static string BuildSystemPrompt(IReadOnlyList<string> retrieved, bool enableTools = false)
     {
         var sb = new StringBuilder();
         
-        // Use a simpler, more compatible prompt format
-        sb.AppendLine("You are a helpful assistant. Use context when relevant and cite sources.");
+
+        sb.AppendLine("<|begin_of_text|>");
+        sb.AppendLine("<|start_header_id|>system<|end_header_id|>");
+        sb.AppendLine();
+        
+
+        sb.AppendLine("You are an AI assistant specialized in answering questions based on provided context information. Follow these instructions strictly:");
+        sb.AppendLine();
+        sb.AppendLine("## Core Instructions:");
+        sb.AppendLine("- **ONLY respond as the assistant** - never generate or fill in user messages, questions, or responses");
+        sb.AppendLine("- **Always format your response in markdown** with proper headings, lists, code blocks, and emphasis");
+        sb.AppendLine("- **Base your answers primarily on the provided context** - if context doesn't contain the answer, clearly state this");
+        sb.AppendLine("- **Cite sources explicitly** when referencing context information");
+        sb.AppendLine("- **Accept and process markdown-formatted input** from users");
+        sb.AppendLine();
+        sb.AppendLine("## Response Format Requirements:");
+        sb.AppendLine("- Use **bold** for emphasis and key points");
+        sb.AppendLine("- Use `code formatting` for technical terms, file names, and code snippets");
+        sb.AppendLine("- Use proper markdown headers (##, ###) to structure your response");
+        sb.AppendLine("- Use bullet points or numbered lists when presenting multiple items");
+        sb.AppendLine("- Include relevant code blocks with proper language specification when applicable");
+        sb.AppendLine();
+        sb.AppendLine("## Context Usage:");
+        sb.AppendLine("- Analyze the provided context thoroughly before responding");
+        sb.AppendLine("- Quote relevant portions using markdown blockquotes (>) when appropriate");
+        sb.AppendLine("- If multiple context sources conflict, acknowledge and explain the differences");
+        sb.AppendLine("- If context is insufficient, explicitly state what additional information would be needed");
         
         if (enableTools)
         {
             sb.AppendLine();
+            sb.AppendLine("## Tool Usage:");
             sb.AppendLine("When you need to use a tool, format it as:");
+            sb.AppendLine("```");
             sb.AppendLine("TOOL_CALL");
             sb.AppendLine("name: tool_name");
             sb.AppendLine("args: tool_arguments");
             sb.AppendLine("END_TOOL_CALL");
-            sb.AppendLine();
+            sb.AppendLine("```");
             sb.AppendLine("The tool result will be provided in TOOL_RESULT...END_TOOL_RESULT tags.");
         }
         
         if (retrieved.Count > 0)
         {
             sb.AppendLine();
-            sb.AppendLine("Context:");
-            foreach (var ctx in retrieved) 
+            sb.AppendLine("## Available Context:");
+            for (int i = 0; i < retrieved.Count; i++)
             {
-                sb.AppendLine($"- {ctx}");
+                sb.AppendLine($"**Source {i + 1}:**");
+                sb.AppendLine($"> {retrieved[i]}");
+                sb.AppendLine();
             }
-            sb.AppendLine();
         }
         
-        // Add conversation history in a simple format
+
+        sb.AppendLine("<|eot_id|>");
+        
+        return sb.ToString();
+    }
+
+    internal static string BuildPrompt(IReadOnlyList<(string role, string content)> history, string user, IReadOnlyList<string> retrieved, bool enableTools = false)
+    {
+        var sb = new StringBuilder();
+        
+
+        sb.AppendLine("<|begin_of_text|>");
+        sb.AppendLine("<|start_header_id|>system<|end_header_id|>");
+        sb.AppendLine();
+        
+
+        sb.AppendLine("You are an AI assistant specialized in answering questions based on provided context information. Follow these instructions strictly:");
+        sb.AppendLine();
+        sb.AppendLine("## Core Instructions:");
+        sb.AppendLine("- **ONLY respond as the assistant** - never generate or fill in user messages, questions, or responses");
+        sb.AppendLine("- **Always format your response in markdown** with proper headings, lists, code blocks, and emphasis");
+        sb.AppendLine("- **Base your answers primarily on the provided context** - if context doesn't contain the answer, clearly state this");
+        sb.AppendLine("- **Cite sources explicitly** when referencing context information");
+        sb.AppendLine("- **Accept and process markdown-formatted input** from users");
+        sb.AppendLine();
+        sb.AppendLine("## Response Format Requirements:");
+        sb.AppendLine("- Use **bold** for emphasis and key points");
+        sb.AppendLine("- Use `code formatting` for technical terms, file names, and code snippets");
+        sb.AppendLine("- Use proper markdown headers (##, ###) to structure your response");
+        sb.AppendLine("- Use bullet points or numbered lists when presenting multiple items");
+        sb.AppendLine("- Include relevant code blocks with proper language specification when applicable");
+        sb.AppendLine();
+        sb.AppendLine("## Context Usage:");
+        sb.AppendLine("- Analyze the provided context thoroughly before responding");
+        sb.AppendLine("- Quote relevant portions using markdown blockquotes (>) when appropriate");
+        sb.AppendLine("- If multiple context sources conflict, acknowledge and explain the differences");
+        sb.AppendLine("- If context is insufficient, explicitly state what additional information would be needed");
+        
+        if (enableTools)
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Tool Usage:");
+            sb.AppendLine("When you need to use a tool, format it as:");
+            sb.AppendLine("```");
+            sb.AppendLine("TOOL_CALL");
+            sb.AppendLine("name: tool_name");
+            sb.AppendLine("args: tool_arguments");
+            sb.AppendLine("END_TOOL_CALL");
+            sb.AppendLine("```");
+            sb.AppendLine("The tool result will be provided in TOOL_RESULT...END_TOOL_RESULT tags.");
+        }
+        
+        if (retrieved.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("## Available Context:");
+            for (int i = 0; i < retrieved.Count; i++)
+            {
+                sb.AppendLine($"**Source {i + 1}:**");
+                sb.AppendLine($"> {retrieved[i]}");
+                sb.AppendLine();
+            }
+        }
+        
+
+        sb.AppendLine("<|eot_id|>");
+        
+
         foreach (var (role, content) in history)
         {
-            sb.AppendLine($"{role.ToUpperInvariant()}: {content}");
+            if (role.Equals("user", StringComparison.OrdinalIgnoreCase))
+            {
+                sb.AppendLine("<|start_header_id|>user<|end_header_id|>");
+                sb.AppendLine();
+                sb.AppendLine(content);
+                sb.AppendLine("<|eot_id|>");
+            }
+            else if (role.Equals("assistant", StringComparison.OrdinalIgnoreCase))
+            {
+                sb.AppendLine("<|start_header_id|>assistant<|end_header_id|>");
+                sb.AppendLine();
+                sb.AppendLine(content);
+                sb.AppendLine("<|eot_id|>");
+            }
         }
         
-        sb.AppendLine($"USER: {user}");
-        sb.Append("ASSISTANT:");
+
+        sb.AppendLine("<|start_header_id|>user<|end_header_id|>");
+        sb.AppendLine();
+        sb.AppendLine(user);
+        sb.AppendLine("<|eot_id|>");
+        
+
+        sb.AppendLine("<|start_header_id|>assistant<|end_header_id|>");
+        sb.AppendLine();
+        
         return sb.ToString();
     }
 }

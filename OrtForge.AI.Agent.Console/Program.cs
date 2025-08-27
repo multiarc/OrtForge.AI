@@ -1,5 +1,7 @@
+using System.Text;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using OrtForge.AI.Agent.Agents;
+using OrtForge.AI.Agent.Generation;
 using OrtForge.AI.Agent.LLM;
 using OrtForge.AI.Agent.Rag;
 using OrtForge.AI.Agent.Runtime;
@@ -64,21 +66,131 @@ internal static class Program
         var tok = TokenizerService.FromHuggingFace(tokenizerPath);
         var vec = new InMemoryVectorStore();
         var agent = new AgentOrchestrator(llama, tok, embeddingModel, vec, rerankerModel);
-
-        System.Console.WriteLine("Enter your message (empty line to quit):");
+        
+        using var session = new ConversationSession(tok);
+        
+        System.Console.WriteLine("🤖 OrtForge.AI Chat - Llama 3.2 Agent with Session Management");
+        System.Console.WriteLine("💬 Enter your message (empty line to quit):");
+        System.Console.WriteLine();
+        
+        bool isFirstMessage = true;
+        
         while (true)
         {
-            System.Console.Write("> ");
+            System.Console.Write("🧑 > ");
             var user = System.Console.ReadLine();
-            if (string.IsNullOrWhiteSpace(user)) break;
-            var answer = await agent.ChatTurnAsync(user!, Array.Empty<(string role, string content)>());
+            if (string.IsNullOrWhiteSpace(user)) 
+            {
+                System.Console.WriteLine("👋 Goodbye!");
+                break;
+            }
+            
             System.Console.WriteLine();
-            System.Console.WriteLine($"Assistant: {answer}");
+            System.Console.Write("🤖 Assistant: ");
+            
+            try
+            {
+                if (isFirstMessage)
+                {
+                    var queryVec = await embeddingModel.CreateEmbeddingAsync(user!);
+                    var retrieved = vec.TopK(queryVec, 5).Select(x => x.Text).ToList();
+                    
+                    await session.InitializeSystemPromptAsync(llama, retrieved, enableTools: false);
+                    isFirstMessage = false;
+                }
+                
+                await session.AddMessageAsync("user", user!, llama);
+                
+                var kvState = session.GetCurrentKvState();
+                var assistantStartTokens = tok.EncodeToIds("<|start_header_id|>assistant<|end_header_id|>\n\n");
+                
+                var answer = await GenerateResponseAsync(llama, tok, assistantStartTokens, kvState);
+                
+                await session.AddMessageAsync("assistant", answer, llama);
+            }
+            catch (Exception ex)
+            {
+                System.Console.WriteLine();
+                System.Console.WriteLine($"❌ Error: {ex.Message}");
+            }
+            
+            System.Console.WriteLine();
         }
         
         // Dispose models
         embeddingModel.Dispose();
         rerankerModel?.Dispose();
+    }
+
+    private static async Task<string> GenerateResponseAsync(LlamaSession llama, TokenizerService tokenizer, int[] startTokens, KvState kvState)
+    {
+        var config = LlamaOptimizations.GetOptimalConfigForModel(llama.ModelName);
+        var response = new StringBuilder();
+        var generatedTokens = new List<int>();
+
+        var idsArray = startTokens.Select(id => (long)id).ToArray();
+        var inputIds = Microsoft.ML.OnnxRuntime.OrtValue.CreateTensorValueFromMemory<long>(idsArray, new long[] { 1, idsArray.Length });
+
+        for (int step = 0; step < config.MaxTokens; step++)
+        {
+            var currentInput = step == 0 ? idsArray : new long[] { generatedTokens[^1] };
+            var currentInputIds = Microsoft.ML.OnnxRuntime.OrtValue.CreateTensorValueFromMemory<long>(currentInput, new long[] { 1, currentInput.Length });
+            
+            var stepInputs = new LlamaSession.StepInputs(currentInputIds, kvState, null, null);
+            var outputs = await llama.RunStepAsync(stepInputs);
+            
+            var logitsShape = outputs.Logits.GetTensorTypeAndShape().Shape;
+            var vocab = (int)logitsShape[^1];
+            
+            var nextId = GetNextToken(outputs, vocab, config, generatedTokens);
+            generatedTokens.Add(nextId);
+
+            var tokenText = tokenizer.DecodeFromIds(new[] { nextId });
+            System.Console.Write(tokenText);
+            response.Append(tokenText);
+
+            if (config.StopTokenIds.Contains(nextId) || 
+                config.StopSequences.Any(seq => response.ToString().Contains(seq)))
+            {
+                break;
+            }
+
+            kvState = outputs.KvCache;
+            outputs.Dispose();
+            
+            if (step == 0) inputIds.Dispose();
+            currentInputIds.Dispose();
+        }
+
+        System.Console.WriteLine();
+        return response.ToString();
+    }
+
+    private static int GetNextToken(LlamaSession.StepOutputs outputs, int vocab, InferenceConfig config, List<int> previousTokens)
+    {
+        var span = outputs.GetLogitsSpan();
+        var logitsShape = outputs.Logits.GetTensorTypeAndShape().Shape;
+        
+        Span<float> logitsForSampling;
+        if (logitsShape.Length == 3)
+        {
+            var seqLen = (int)logitsShape[1];
+            var vocabSize = (int)logitsShape[2];
+            var lastTokenStart = (seqLen - 1) * vocabSize;
+            logitsForSampling = span.Slice(lastTokenStart, vocabSize);
+        }
+        else if (logitsShape.Length == 2)
+        {
+            var vocabSize = (int)logitsShape[1];
+            logitsForSampling = span.Slice(0, vocabSize);
+        }
+        else
+        {
+            logitsForSampling = span;
+        }
+        
+        var previousTokensSpan = previousTokens.Count > 0 ? previousTokens.ToArray().AsSpan() : ReadOnlySpan<int>.Empty;
+        return Sampling.Sample(logitsForSampling, config, previousTokensSpan);
     }
 }
 
