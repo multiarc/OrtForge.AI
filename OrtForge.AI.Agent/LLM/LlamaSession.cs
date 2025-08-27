@@ -165,8 +165,7 @@ public sealed class LlamaSession : IDisposable
         var batchSize = inputShape[0];
         var sequenceLength = inputShape[1];
         
-        // Debug: Log sequence length calculations
-        Console.WriteLine($"DEBUG: Step - AccumulatedSeqLen={inputs.Kv.AccumulatedSequenceLength}, CurrentInputLen={sequenceLength}, TotalKvLen={inputs.Kv.AccumulatedSequenceLength + sequenceLength}");
+
         
         var inputValues = new List<OrtValue>();
         var inputNamesList = new List<string>();
@@ -253,7 +252,6 @@ public sealed class LlamaSession : IDisposable
 
                 // Debug: Log input tensor shapes
                 var kvTensorShape = kv.Value.GetTensorTypeAndShape().Shape;
-                Console.WriteLine($"DEBUG: Input tensor {targetName}: shape=[{string.Join(",", kvTensorShape)}]");
                 
                 inputValues.Add(kv.Value);
                 inputNamesList.Add(targetName);
@@ -326,7 +324,7 @@ public sealed class LlamaSession : IDisposable
                             {
                                 // First step (prefill) - use input sequence length
                                 kvDims[i] = (int)sequenceLength;
-                                Console.WriteLine($"DEBUG: First step - output KV length = {sequenceLength}");
+
                             }
                             else
                             {
@@ -338,13 +336,13 @@ public sealed class LlamaSession : IDisposable
                                     var inputKvShape = firstKvTensor.GetTensorTypeAndShape().Shape;
                                     var inputKvSeqLen = inputKvShape[2]; // Use same size as input
                                     kvDims[i] = (int)inputKvSeqLen;
-                                    Console.WriteLine($"DEBUG: Generation step - matching input KV seq len = {inputKvSeqLen}");
+
                                 }
                                 else
                                 {
                                     // Fallback 
                                     kvDims[i] = inputs.Kv.AccumulatedSequenceLength;
-                                    Console.WriteLine($"DEBUG: Fallback - using accumulated length = {kvDims[i]}");
+
                                 }
                             }
                         }
@@ -352,8 +350,7 @@ public sealed class LlamaSession : IDisposable
                 }
                 var longDims = kvDims.Select(d => (long)d).ToArray();
                 
-                // Debug: Log output tensor creation
-                Console.WriteLine($"DEBUG: Creating output tensor {output.Key}: shape=[{string.Join(",", longDims)}]");
+
                 
                 // Direct allocation - let ONNX Runtime handle memory pooling efficiently
                 var kvTensor = OrtValue.CreateAllocatedTensorValue(
@@ -385,7 +382,7 @@ public sealed class LlamaSession : IDisposable
         // Always increment the accumulated length by the tokens we just processed
         var newAccumulatedLength = inputs.Kv.AccumulatedSequenceLength + (int)sequenceLength;
         var newKv = new KvState(newAccumulatedLength);
-        Console.WriteLine($"DEBUG: Creating new KvState with AccumulatedSequenceLength={newAccumulatedLength}");
+
         OrtValue? logits = null;
         
         for (int i = 0; i < outputNamesArray.Length; i++)
