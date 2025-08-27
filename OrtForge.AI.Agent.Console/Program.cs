@@ -1,4 +1,3 @@
-using System.Text;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using OrtForge.AI.Agent.Agents;
 using OrtForge.AI.Agent.Generation;
@@ -68,12 +67,11 @@ internal static class Program
         var agent = new AgentOrchestrator(llama, tok, embeddingModel, vec, rerankerModel);
         
         using var session = new ConversationSession(tok);
+        bool isInitialized = false;
         
-        System.Console.WriteLine("🤖 OrtForge.AI Chat - Llama 3.2 Agent with Session Management");
+        System.Console.WriteLine("🤖 OrtForge.AI Chat - Llama 3.2 Agent with KV Cache Session Management");
         System.Console.WriteLine("💬 Enter your message (empty line to quit):");
         System.Console.WriteLine();
-        
-        bool isFirstMessage = true;
         
         while (true)
         {
@@ -90,26 +88,24 @@ internal static class Program
             
             try
             {
-                if (isFirstMessage)
+                if (!isInitialized)
                 {
                     var retrieved = new List<string>();
-                    
                     await session.InitializeSystemPromptAsync(llama, retrieved, enableTools: false);
-                    isFirstMessage = false;
+                    isInitialized = true;
                 }
                 
                 await session.AddMessageAsync("user", user!, llama);
                 
                 var assistantStartTokens = tok.EncodeToIds("<|start_header_id|>assistant<|end_header_id|>\n\n");
+                var currentKvState = session.GetCurrentKvState();
                 
-                if (assistantStartTokens?.Length > 0)
+                var (answer, finalKvState) = await GenerateResponseWithSession(llama, tok, assistantStartTokens, currentKvState);
+                
+                if (!string.IsNullOrEmpty(answer))
                 {
-                    var answer = await GenerateResponseAsync(llama, tok, assistantStartTokens, session.GetCurrentKvState());
-                    
-                    if (!string.IsNullOrEmpty(answer))
-                    {
-                        await session.AddMessageAsync("assistant", answer, null);
-                    }
+                    session.UpdateKvState(finalKvState);
+                    await session.AddMessageAsync("assistant", answer, null);
                 }
             }
             catch (Exception ex)
@@ -127,17 +123,15 @@ internal static class Program
         rerankerModel?.Dispose();
     }
 
-    private static async Task<string> GenerateResponseAsync(LlamaSession llama, TokenizerService tokenizer, int[] startTokens, KvState kvState)
+    private static async Task<(string response, KvState finalKvState)> GenerateResponseWithSession(LlamaSession llama, TokenizerService tokenizer, int[] startTokens, KvState kvState)
     {
         if (startTokens == null || startTokens.Length == 0)
-            return string.Empty;
-            
-        if (kvState == null)
-            throw new ArgumentNullException(nameof(kvState));
+            return (string.Empty, kvState);
             
         var config = LlamaOptimizations.GetOptimalConfigForModel(llama.ModelName);
-        var response = new StringBuilder();
+        var response = new System.Text.StringBuilder();
         var generatedTokens = new List<int>();
+        var currentKvState = kvState;
 
         var idsArray = startTokens.Select(id => (long)id).ToArray();
         
@@ -146,7 +140,7 @@ internal static class Program
             var currentInput = step == 0 ? idsArray : new long[] { generatedTokens[^1] };
             
             using var currentInputIds = Microsoft.ML.OnnxRuntime.OrtValue.CreateTensorValueFromMemory<long>(currentInput, new long[] { 1, currentInput.Length });
-            var stepInputs = new LlamaSession.StepInputs(currentInputIds, kvState, null, null);
+            var stepInputs = new LlamaSession.StepInputs(currentInputIds, currentKvState, null, null);
             
             var outputs = await llama.RunStepAsync(stepInputs);
             
@@ -163,14 +157,15 @@ internal static class Program
             bool shouldStop = config.StopTokenIds.Contains(nextId) || 
                              config.StopSequences.Any(seq => response.ToString().Contains(seq));
 
-            kvState = outputs.KvCache;
-            outputs.Dispose();
+            currentKvState = outputs.KvCache;
+            
+            outputs.Logits.Dispose();
             
             if (shouldStop) break;
         }
 
         System.Console.WriteLine();
-        return response.ToString();
+        return (response.ToString(), currentKvState);
     }
 
     private static int GetNextToken(LlamaSession.StepOutputs outputs, int vocab, InferenceConfig config, List<int> previousTokens)

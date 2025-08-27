@@ -102,6 +102,13 @@ public sealed class ConversationSession : IDisposable
         return _kvState ?? throw new InvalidOperationException("Session not initialized");
     }
 
+    public void UpdateKvState(KvState newKvState)
+    {
+        _kvState = newKvState;
+    }
+
+
+
 
     private async Task TruncateIfNeededAsync(LlamaSession? llmSession)
     {

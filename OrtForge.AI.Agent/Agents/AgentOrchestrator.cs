@@ -62,7 +62,7 @@ public sealed class AgentOrchestrator
 
         var idsArray = inputIds.Select(id => (long)id).ToArray();
 
-        var kv = new KvState(); // Simplified - no KvArena needed
+        var kv = new KvState();
         var response = new StringBuilder();
         var generatedTokens = new List<int>();
         var sequenceLength = inputIds.Length;
