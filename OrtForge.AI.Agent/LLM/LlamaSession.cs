@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
@@ -151,12 +152,20 @@ public sealed class LlamaSession : IDisposable
         public Span<float> GetLogitsSpan()
         {
             var typeInfo = Logits.GetTensorTypeAndShape();
-            return typeInfo.ElementDataType switch
+            switch (typeInfo.ElementDataType)
             {
-                TensorElementType.Float => Logits.GetTensorMutableDataAsSpan<float>(),
-                TensorElementType.Float16 => throw new NotSupportedException("Use GetLogitsArray() for Float16 tensors"),
-                _ => throw new NotSupportedException($"Unsupported tensor element type: {typeInfo.ElementDataType}")
-            };
+                case TensorElementType.Float:
+                    return Logits.GetTensorMutableDataAsSpan<float>();
+                
+                case TensorElementType.Float16:
+                case TensorElementType.BFloat16:
+                    // For 16-bit types, we need to convert to float first
+                    // This requires allocation, so performance is similar to GetLogitsArray()
+                    return GetLogitsArray().AsSpan();
+                
+                default:
+                    throw new NotSupportedException($"Unsupported tensor element type: {typeInfo.ElementDataType}");
+            }
         }
         
         public float[] GetLogitsArray()
@@ -173,11 +182,34 @@ public sealed class LlamaSession : IDisposable
                     }
                 case TensorElementType.Float16:
                     {
-                        var halfSpan = Logits.GetTensorMutableDataAsSpan<Half>();
-                        var array = new float[halfSpan.Length];
+                        // Follow ModelHostBase pattern for Float16 handling
+                        var byteSpan = Logits.GetTensorMutableDataAsSpan<byte>();
+                        var halfSpan = MemoryMarshal.Cast<byte, Half>(byteSpan);
+                        var array = GC.AllocateUninitializedArray<float>(halfSpan.Length);
                         for (int i = 0; i < halfSpan.Length; i++)
                         {
                             array[i] = (float)halfSpan[i];
+                        }
+                        
+                        // Debug: Check for NaN/Inf values in logits
+                        var nanCount = array.Count(f => float.IsNaN(f));
+                        var infCount = array.Count(f => float.IsInfinity(f));
+                        if (nanCount > 0 || infCount > 0)
+                        {
+                            Console.WriteLine($"WARNING: Logits contain {nanCount} NaN and {infCount} Inf values");
+                        }
+                        
+                        return array;
+                    }
+                case TensorElementType.BFloat16:
+                    {
+                        // Follow ModelHostBase pattern for BFloat16 handling
+                        var byteSpan = Logits.GetTensorMutableDataAsSpan<byte>();
+                        var bfloatSpan = MemoryMarshal.Cast<byte, BFloat16>(byteSpan);
+                        var array = GC.AllocateUninitializedArray<float>(bfloatSpan.Length);
+                        for (int i = 0; i < bfloatSpan.Length; i++)
+                        {
+                            array[i] = (float)bfloatSpan[i];
                         }
                         return array;
                     }
@@ -196,9 +228,6 @@ public sealed class LlamaSession : IDisposable
         var inputShape = inputs.InputIds.GetTensorTypeAndShape().Shape;
         var batchSize = inputShape[0];
         var sequenceLength = inputShape[1];
-        
-        // Debug: Print all expected inputs
-        Console.WriteLine($"Expected inputs: {string.Join(", ", _session.InputMetadata.Keys)}");
         
         var inputValues = new List<OrtValue>();
         var inputNamesList = new List<string>();
@@ -241,22 +270,20 @@ public sealed class LlamaSession : IDisposable
             inputNamesList.Add("position_ids");
         }
 
-        bool hasAttentionMask = false;
-        if (inputs.AttentionMask != null)
+        if (inputMetadataKeys.Contains("attention_mask"))
         {
-            foreach (var key in inputMetadataKeys)
+            if (inputs.AttentionMask != null)
             {
-                if (key == "attention_mask")
-                {
-                    hasAttentionMask = true;
-                    break;
-                }
+                inputValues.Add(inputs.AttentionMask);
             }
-        }
-
-        if (hasAttentionMask && inputs.AttentionMask != null)
-        {
-            inputValues.Add(inputs.AttentionMask);
+            else
+            {
+                // Create default attention mask (all 1s)
+                var defaultAttentionMask = new long[sequenceLength];
+                Array.Fill(defaultAttentionMask, 1L);
+                var attentionMaskOrt = OrtValue.CreateTensorValueFromMemory(defaultAttentionMask, [1, sequenceLength]);
+                inputValues.Add(attentionMaskOrt);
+            }
             inputNamesList.Add("attention_mask");
         }
 
@@ -299,7 +326,7 @@ public sealed class LlamaSession : IDisposable
                 !providedKvInputs.Contains(inputName) &&
                 inputName != "input_ids" && inputName != "position_ids" && inputName != "attention_mask")
             {
-                Console.WriteLine($"Creating empty KV tensor for missing input: {inputName}");
+
                 var inputMeta = _session.InputMetadata[inputName];
                 var kvDims = inputMeta.Dimensions.ToArray();
                 
@@ -333,7 +360,6 @@ public sealed class LlamaSession : IDisposable
                 var vocabSize = output.Value.Dimensions[^1];
                 
                 var tensorElementType = GetTensorElementType(output.Value.ElementType);
-                Console.WriteLine($"Output '{output.Key}' mapped to {tensorElementType}");
                 
                 var logitsTensor = OrtValue.CreateAllocatedTensorValue(
                     OrtAllocator.DefaultInstance, 
@@ -415,7 +441,8 @@ public sealed class LlamaSession : IDisposable
     public async Task<StepOutputs> RunOptimizedStepAsync(long[] inputIds, KvState kv, int currentStep, int sequenceLength, CancellationToken cancellationToken = default)
     {
         var positionIds = LlamaOptimizations.CreateOptimalPositionIds(sequenceLength, currentStep, ModelName);
-        var attentionMask = currentStep == 0 ? LlamaOptimizations.CreateOptimalAttentionMask(inputIds.Length, ModelName) : null;
+        // Always provide attention mask since model requires it
+        var attentionMask = LlamaOptimizations.CreateOptimalAttentionMask(inputIds.Length, ModelName);
         
         using var inputs = StepInputs.Create(inputIds, kv, positionIds, attentionMask);
         return await RunStepAsync(inputs, cancellationToken);

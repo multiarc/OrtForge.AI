@@ -18,7 +18,6 @@ public static class OrtRuntimeFactory
     {
         var so = new SessionOptions();
         so.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
-        so.AppendExecutionProvider_ROCm();
         so.AppendExecutionProvider_CPU();
         return so;
     }

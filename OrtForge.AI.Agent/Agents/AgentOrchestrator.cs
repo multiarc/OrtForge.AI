@@ -71,10 +71,31 @@ public sealed class AgentOrchestrator
         int GetNextSample(LlamaSession.StepOutputs outputs, int vocab)
         {
             var span = outputs.GetLogitsSpan();
-            var logitsLast = span.Slice(span.Length - vocab, vocab);
+            var logitsShape = outputs.Logits.GetTensorTypeAndShape().Shape;
+            
+            // For logits shape [batch, seq_len, vocab], we need the last token's logits
+            Span<float> logitsForSampling;
+            if (logitsShape.Length == 3) // [batch, seq_len, vocab]
+            {
+                var batchSize = (int)logitsShape[0];
+                var seqLen = (int)logitsShape[1];
+                var vocabSize = (int)logitsShape[2];
+                
+                // Take logits for the last token position: span[(seqLen-1) * vocab : seqLen * vocab]
+                var lastTokenStart = (seqLen - 1) * vocab;
+                logitsForSampling = span.Slice(lastTokenStart, vocab);
+                
+                Console.WriteLine($"Logits [{batchSize}, {seqLen}, {vocabSize}] -> using position {seqLen-1}");
+            }
+            else
+            {
+                // Fallback: assume span is already the right size [vocab]
+                logitsForSampling = span;
+                Console.WriteLine($"Logits shape: [{string.Join(", ", logitsShape)}] -> using full span");
+            }
             
             var previousTokensSpan = generatedTokens.Count > 0 ? generatedTokens.ToArray().AsSpan() : ReadOnlySpan<int>.Empty;
-            return Sampling.Sample(logitsLast, config, previousTokensSpan);
+            return Sampling.Sample(logitsForSampling, config, previousTokensSpan);
         }
         
         for (int step = 0; step < config.MaxTokens; step++)
@@ -91,6 +112,7 @@ public sealed class AgentOrchestrator
             generatedTokens.Add(nextId);
 
             var tokenText = _tokenizer.DecodeFromIds(new[] { nextId });
+            Console.WriteLine($"Generated token ID: {nextId}, text: '{tokenText}'");
             response.Append(tokenText);
             
             if (toolExecutor != null)
@@ -175,10 +197,31 @@ public sealed class AgentOrchestrator
         int GetNextSample(LlamaSession.StepOutputs outputs, int vocab)
         {
             var span = outputs.GetLogitsSpan();
-            var logitsLast = span.Slice(span.Length - vocab, vocab);
+            var logitsShape = outputs.Logits.GetTensorTypeAndShape().Shape;
+            
+            // For logits shape [batch, seq_len, vocab], we need the last token's logits
+            Span<float> logitsForSampling;
+            if (logitsShape.Length == 3) // [batch, seq_len, vocab]
+            {
+                var batchSize = (int)logitsShape[0];
+                var seqLen = (int)logitsShape[1];
+                var vocabSize = (int)logitsShape[2];
+                
+                // Take logits for the last token position: span[(seqLen-1) * vocab : seqLen * vocab]
+                var lastTokenStart = (seqLen - 1) * vocab;
+                logitsForSampling = span.Slice(lastTokenStart, vocab);
+                
+                Console.WriteLine($"Logits [{batchSize}, {seqLen}, {vocabSize}] -> using position {seqLen-1}");
+            }
+            else
+            {
+                // Fallback: assume span is already the right size [vocab]
+                logitsForSampling = span;
+                Console.WriteLine($"Logits shape: [{string.Join(", ", logitsShape)}] -> using full span");
+            }
             
             var previousTokensSpan = generatedTokens.Count > 0 ? generatedTokens.ToArray().AsSpan() : ReadOnlySpan<int>.Empty;
-            return Sampling.Sample(logitsLast, config, previousTokensSpan);
+            return Sampling.Sample(logitsForSampling, config, previousTokensSpan);
         }
         
         for (int step = 0; step < config.MaxTokens; step++)
@@ -194,6 +237,7 @@ public sealed class AgentOrchestrator
             generatedTokens.Add(nextId);
 
             var tokenText = _tokenizer.DecodeFromIds(new[] { nextId });
+            Console.WriteLine($"Generated token ID: {nextId}, text: '{tokenText}'");
             response.Append(tokenText);
             yield return tokenText;
             
