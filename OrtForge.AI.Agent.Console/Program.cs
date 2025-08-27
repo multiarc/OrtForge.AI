@@ -92,8 +92,7 @@ internal static class Program
             {
                 if (isFirstMessage)
                 {
-                    var queryVec = await embeddingModel.CreateEmbeddingAsync(user!);
-                    var retrieved = vec.TopK(queryVec, 5).Select(x => x.Text).ToList();
+                    var retrieved = new List<string>();
                     
                     await session.InitializeSystemPromptAsync(llama, retrieved, enableTools: false);
                     isFirstMessage = false;
@@ -101,17 +100,23 @@ internal static class Program
                 
                 await session.AddMessageAsync("user", user!, llama);
                 
-                var kvState = session.GetCurrentKvState();
                 var assistantStartTokens = tok.EncodeToIds("<|start_header_id|>assistant<|end_header_id|>\n\n");
                 
-                var answer = await GenerateResponseAsync(llama, tok, assistantStartTokens, kvState);
-                
-                await session.AddMessageAsync("assistant", answer, llama);
+                if (assistantStartTokens?.Length > 0)
+                {
+                    var answer = await GenerateResponseAsync(llama, tok, assistantStartTokens, session.GetCurrentKvState());
+                    
+                    if (!string.IsNullOrEmpty(answer))
+                    {
+                        await session.AddMessageAsync("assistant", answer, null);
+                    }
+                }
             }
             catch (Exception ex)
             {
                 System.Console.WriteLine();
                 System.Console.WriteLine($"❌ Error: {ex.Message}");
+                System.Console.WriteLine($"❌ Stack trace: {ex.StackTrace}");
             }
             
             System.Console.WriteLine();
@@ -124,19 +129,25 @@ internal static class Program
 
     private static async Task<string> GenerateResponseAsync(LlamaSession llama, TokenizerService tokenizer, int[] startTokens, KvState kvState)
     {
+        if (startTokens == null || startTokens.Length == 0)
+            return string.Empty;
+            
+        if (kvState == null)
+            throw new ArgumentNullException(nameof(kvState));
+            
         var config = LlamaOptimizations.GetOptimalConfigForModel(llama.ModelName);
         var response = new StringBuilder();
         var generatedTokens = new List<int>();
 
         var idsArray = startTokens.Select(id => (long)id).ToArray();
-        var inputIds = Microsoft.ML.OnnxRuntime.OrtValue.CreateTensorValueFromMemory<long>(idsArray, new long[] { 1, idsArray.Length });
-
+        
         for (int step = 0; step < config.MaxTokens; step++)
         {
             var currentInput = step == 0 ? idsArray : new long[] { generatedTokens[^1] };
-            var currentInputIds = Microsoft.ML.OnnxRuntime.OrtValue.CreateTensorValueFromMemory<long>(currentInput, new long[] { 1, currentInput.Length });
             
+            using var currentInputIds = Microsoft.ML.OnnxRuntime.OrtValue.CreateTensorValueFromMemory<long>(currentInput, new long[] { 1, currentInput.Length });
             var stepInputs = new LlamaSession.StepInputs(currentInputIds, kvState, null, null);
+            
             var outputs = await llama.RunStepAsync(stepInputs);
             
             var logitsShape = outputs.Logits.GetTensorTypeAndShape().Shape;
@@ -149,17 +160,13 @@ internal static class Program
             System.Console.Write(tokenText);
             response.Append(tokenText);
 
-            if (config.StopTokenIds.Contains(nextId) || 
-                config.StopSequences.Any(seq => response.ToString().Contains(seq)))
-            {
-                break;
-            }
+            bool shouldStop = config.StopTokenIds.Contains(nextId) || 
+                             config.StopSequences.Any(seq => response.ToString().Contains(seq));
 
             kvState = outputs.KvCache;
             outputs.Dispose();
             
-            if (step == 0) inputIds.Dispose();
-            currentInputIds.Dispose();
+            if (shouldStop) break;
         }
 
         System.Console.WriteLine();
