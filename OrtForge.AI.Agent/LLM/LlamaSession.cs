@@ -165,6 +165,9 @@ public sealed class LlamaSession : IDisposable
         var batchSize = inputShape[0];
         var sequenceLength = inputShape[1];
         
+        // Debug: Log sequence length calculations
+        Console.WriteLine($"DEBUG: Step - AccumulatedSeqLen={inputs.Kv.AccumulatedSequenceLength}, CurrentInputLen={sequenceLength}, TotalKvLen={inputs.Kv.AccumulatedSequenceLength + sequenceLength}");
+        
         var inputValues = new List<OrtValue>();
         var inputNamesList = new List<string>();
         var outputCount = outputMetadata.Count;
@@ -248,6 +251,10 @@ public sealed class LlamaSession : IDisposable
                 
                 if (targetName == null) continue;
 
+                // Debug: Log input tensor shapes
+                var kvTensorShape = kv.Value.GetTensorTypeAndShape().Shape;
+                Console.WriteLine($"DEBUG: Input tensor {targetName}: shape=[{string.Join(",", kvTensorShape)}]");
+                
                 inputValues.Add(kv.Value);
                 inputNamesList.Add(targetName);
                 providedKvInputs.Add(targetName);
@@ -313,10 +320,41 @@ public sealed class LlamaSession : IDisposable
                     if (kvDims[i] < 0) // Replace symbolic dimensions
                     {
                         if (i == 0) kvDims[i] = (int)batchSize;
-                        else if (i == 2) kvDims[i] = inputs.Kv.AccumulatedSequenceLength + (int)sequenceLength; // Total KV sequence length
+                        else if (i == 2) 
+                        {
+                            if (inputs.Kv.Tensors.Count == 0)
+                            {
+                                // First step (prefill) - use input sequence length
+                                kvDims[i] = (int)sequenceLength;
+                                Console.WriteLine($"DEBUG: First step - output KV length = {sequenceLength}");
+                            }
+                            else
+                            {
+                                // Subsequent steps (generation) - model expects output KV to match input KV size
+                                // The model handles token appending internally
+                                var firstKvTensor = inputs.Kv.Tensors.Values.FirstOrDefault();
+                                if (firstKvTensor != null)
+                                {
+                                    var inputKvShape = firstKvTensor.GetTensorTypeAndShape().Shape;
+                                    var inputKvSeqLen = inputKvShape[2]; // Use same size as input
+                                    kvDims[i] = (int)inputKvSeqLen;
+                                    Console.WriteLine($"DEBUG: Generation step - matching input KV seq len = {inputKvSeqLen}");
+                                }
+                                else
+                                {
+                                    // Fallback 
+                                    kvDims[i] = inputs.Kv.AccumulatedSequenceLength;
+                                    Console.WriteLine($"DEBUG: Fallback - using accumulated length = {kvDims[i]}");
+                                }
+                            }
+                        }
                     }
                 }
                 var longDims = kvDims.Select(d => (long)d).ToArray();
+                
+                // Debug: Log output tensor creation
+                Console.WriteLine($"DEBUG: Creating output tensor {output.Key}: shape=[{string.Join(",", longDims)}]");
+                
                 // Direct allocation - let ONNX Runtime handle memory pooling efficiently
                 var kvTensor = OrtValue.CreateAllocatedTensorValue(
                     OrtAllocator.DefaultInstance, 
@@ -344,7 +382,10 @@ public sealed class LlamaSession : IDisposable
         }
 
         // Create new KvState with updated sequence length
-        var newKv = new KvState(inputs.Kv.AccumulatedSequenceLength + (int)sequenceLength);
+        // Always increment the accumulated length by the tokens we just processed
+        var newAccumulatedLength = inputs.Kv.AccumulatedSequenceLength + (int)sequenceLength;
+        var newKv = new KvState(newAccumulatedLength);
+        Console.WriteLine($"DEBUG: Creating new KvState with AccumulatedSequenceLength={newAccumulatedLength}");
         OrtValue? logits = null;
         
         for (int i = 0; i < outputNamesArray.Length; i++)
