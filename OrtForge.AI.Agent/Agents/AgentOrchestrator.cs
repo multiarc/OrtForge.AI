@@ -65,9 +65,22 @@ public sealed class AgentOrchestrator
             if (!session.IsInitialized)
             {
                 await session.InitializeSystemPromptAsync(_llm, retrieved, toolExecutor != null);
+                await session.AddMessageAsync("user", user, _llm);
             }
-            
-            await session.AddMessageAsync("user", user, _llm);
+            else
+            {
+                var userMessage = $"<|start_header_id|>user<|end_header_id|>\n\n{user}<|eot_id|>";
+                var userTokens = _tokenizer.EncodeToIds(userMessage).Select(id => (long)id).ToArray();
+                
+                var sessionSeqLength = session.GetCurrentKvState().AccumulatedSequenceLength;
+                var totalSeqLength = sessionSeqLength + userTokens.Length;
+                
+                var outputs = await _llm.RunOptimizedStep(userTokens, session.GetCurrentKvState(), 0, totalSeqLength);
+                session.UpdateKvState(outputs.KvCache);
+                outputs.Dispose();
+                
+                session.AddToHistory("user", user);
+            }
             
             var assistantStartTokens = _tokenizer.EncodeToIds("<|start_header_id|>assistant<|end_header_id|>\n\n");
             idsArray = assistantStartTokens.Select(id => (long)id).ToArray();
