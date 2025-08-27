@@ -41,9 +41,10 @@ public sealed class LlamaSession : IDisposable
     {
         public void Dispose()
         {
-            InputIds?.Dispose();
+            InputIds.Dispose();
             PositionIds?.Dispose();
             AttentionMask?.Dispose();
+            Kv.Dispose();
         }
         
         public static StepInputs Create(
@@ -82,7 +83,7 @@ public sealed class LlamaSession : IDisposable
     {
         public void Dispose()
         {
-            Logits?.Dispose();
+            Logits.Dispose();
         }
         
         public Span<float> GetLogitsSpan()

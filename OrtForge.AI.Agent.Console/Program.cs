@@ -1,3 +1,4 @@
+using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using OrtForge.AI.Agent.Agents;
 using OrtForge.AI.Agent.Generation;
@@ -139,11 +140,13 @@ internal static class Program
         {
             var currentInput = step == 0 ? idsArray : new long[] { generatedTokens[^1] };
             
-            using var currentInputIds = Microsoft.ML.OnnxRuntime.OrtValue.CreateTensorValueFromMemory<long>(currentInput, new long[] { 1, currentInput.Length });
-            var stepInputs = new LlamaSession.StepInputs(currentInputIds, currentKvState, null, null);
-            
-            var outputs = await llama.RunStepAsync(stepInputs);
-            
+            var currentInputIds = OrtValue.CreateTensorValueFromMemory(currentInput, [1L, currentInput.Length ]);
+            LlamaSession.StepOutputs outputs;
+            using (var stepInputs = new LlamaSession.StepInputs(currentInputIds, currentKvState, null, null))
+            {
+                outputs = await llama.RunStepAsync(stepInputs);
+            }
+
             var logitsShape = outputs.Logits.GetTensorTypeAndShape().Shape;
             var vocab = (int)logitsShape[^1];
             
@@ -158,8 +161,7 @@ internal static class Program
                              config.StopSequences.Any(seq => response.ToString().Contains(seq));
 
             currentKvState = outputs.KvCache;
-            
-            outputs.Logits.Dispose();
+            outputs.Dispose();
             
             if (shouldStop) break;
         }
