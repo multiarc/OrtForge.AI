@@ -65,22 +65,9 @@ public sealed class AgentOrchestrator
             if (!session.IsInitialized)
             {
                 await session.InitializeSystemPromptAsync(_llm, retrieved, toolExecutor != null);
-                await session.AddMessageAsync("user", user, _llm);
             }
-            else
-            {
-                var userMessage = $"<|start_header_id|>user<|end_header_id|>\n\n{user}<|eot_id|>";
-                var userTokens = _tokenizer.EncodeToIds(userMessage).Select(id => (long)id).ToArray();
-                
-                var sessionSeqLength = session.GetCurrentKvState().AccumulatedSequenceLength;
-                var totalSeqLength = sessionSeqLength + userTokens.Length;
-                
-                var outputs = await _llm.RunOptimizedStep(userTokens, session.GetCurrentKvState(), 0, totalSeqLength);
-                session.UpdateKvState(outputs.KvCache);
-                outputs.Dispose();
-                
-                session.AddToHistory("user", user);
-            }
+            
+            await session.AddMessageAsync("user", user, _llm);
             
             var assistantStartTokens = _tokenizer.EncodeToIds("<|start_header_id|>assistant<|end_header_id|>\n\n");
             idsArray = assistantStartTokens.Select(id => (long)id).ToArray();
@@ -97,6 +84,8 @@ public sealed class AgentOrchestrator
         var generatedTokens = new List<int>();
         var currentSeqLength = session != null ? kv.AccumulatedSequenceLength : idsArray.Length;
         var toolState = new ToolCallState();
+        
+        Console.WriteLine($"🔍 About to start generation: currentSeqLength={currentSeqLength}, idsArray.Length={idsArray.Length}, config.MaxTokens={config.MaxTokens}");
 
         int GetNextSample(LlamaSession.StepOutputs outputs, int vocab)
         {
@@ -135,6 +124,8 @@ public sealed class AgentOrchestrator
             return Sampling.Sample(logitsForSampling, config, previousTokensSpan);
         }
         
+        Console.WriteLine($"🔍 Entering generation loop: MaxTokens={config.MaxTokens}");
+        
         for (int step = 0; step < config.MaxTokens; step++)
         {
             // First step: use full prompt, subsequent steps: use only the last generated token
@@ -143,6 +134,17 @@ public sealed class AgentOrchestrator
             // Update sequence length for the tokens we're about to process
             var tokensToProcess = currentInput.Length;
             var totalSeqLen = currentSeqLength + tokensToProcess;
+            
+            if (step == 0 || step == 1 || step % 10 == 0)
+            {
+                Console.WriteLine($"🔍 Generation step {step}: currentSeqLength={currentSeqLength}, tokensToProcess={tokensToProcess}, totalSeqLen={totalSeqLen}");
+                var sampleTensor = kv.Tensors.FirstOrDefault();
+                if (sampleTensor.Value != null)
+                {
+                    var shape = sampleTensor.Value.GetTensorTypeAndShape().Shape;
+                    Console.WriteLine($"🔍   Input KV sample tensor {sampleTensor.Key}: shape=[{string.Join(",", shape)}]");
+                }
+            }
             
             var outputs = await _llm.RunOptimizedStep(currentInput, kv, step, totalSeqLen);
             var newKv = outputs.KvCache;
@@ -159,18 +161,9 @@ public sealed class AgentOrchestrator
             // Stream token output to console immediately
             Console.Write(tokenText);
             
-            // Check for immediate repetition (same token repeated)
-            if (generatedTokens.Count >= 3)
-            {
-                var recent = generatedTokens.TakeLast(3).ToArray();
-                if (recent[0] == recent[1] && recent[1] == recent[2])
-                {
-                    break;
-                }
-            }
-            
             response.Append(tokenText);
             
+            bool toolExecutionOccurred = false;
             if (toolExecutor != null)
             {
                 toolState.AppendToken(tokenText);
@@ -195,19 +188,66 @@ public sealed class AgentOrchestrator
                         outputs.Dispose();
                         outputs = injectOutputs;
                         newKv = injectOutputs.KvCache;
+                        toolExecutionOccurred = true;
                     }
                 }
             }
-
-            if (IsStopToken(nextId, config) || IsStopSequence(response.ToString(), config)) break;
-
+            
+            // CRITICAL FIX: Update KV state AFTER all processing, BEFORE any break conditions
             kv = newKv;
-            currentSeqLength = totalSeqLen; // Update our sequence length tracker
+            // Update currentSeqLength only if no tool execution occurred (otherwise it's already updated)
+            if (!toolExecutionOccurred)
+            {
+                currentSeqLength = totalSeqLen;
+            }
+
+            if (IsStopToken(nextId, config) || IsStopSequence(response.ToString(), config))
+            {
+                Console.WriteLine($"🔍 Early break at step {step}: IsStopToken={IsStopToken(nextId, config)}, IsStopSequence={IsStopSequence(response.ToString(), config)}");
+                outputs.Dispose();
+                break;
+            }
+
+            if (step == 0 || step == 1 || step % 10 == 0)
+            {
+                Console.WriteLine($"🔍   Output KV AccumulatedSequenceLength={newKv.AccumulatedSequenceLength}");
+                var sampleTensor = newKv.Tensors.FirstOrDefault();
+                if (sampleTensor.Value != null)
+                {
+                    var shape = sampleTensor.Value.GetTensorTypeAndShape().Shape;
+                    Console.WriteLine($"🔍   Output KV sample tensor {sampleTensor.Key}: shape=[{string.Join(",", shape)}]");
+                }
+            }
+            
             outputs.Dispose();
         }
         
+        Console.WriteLine($"🔍 Generation loop completed: generatedTokens.Count={generatedTokens.Count}, response.Length={response.Length}");
+        Console.WriteLine($"🔍 Final loop KV: AccumulatedSequenceLength={kv.AccumulatedSequenceLength}, TensorCount={kv.Tensors.Count}");
+        
         if (session != null)
         {
+            Console.WriteLine($"🔍 ChatTurnAsync: About to update session with kv.AccumulatedSequenceLength={kv.AccumulatedSequenceLength}");
+            Console.WriteLine($"🔍   KV Tensors count: {kv.Tensors.Count}");
+            
+            var firstTensor = kv.Tensors.FirstOrDefault();
+            if (firstTensor.Value != null)
+            {
+                try
+                {
+                    var shape = firstTensor.Value.GetTensorTypeAndShape().Shape;
+                    Console.WriteLine($"🔍   Final sample tensor {firstTensor.Key}: shape=[{string.Join(",", shape)}]");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"🔍   ERROR accessing tensor shape: {ex.Message}");
+                }
+            }
+            else
+            {
+                Console.WriteLine($"🔍   WARNING: firstTensor.Value is null!");
+            }
+            
             session.UpdateKvState(kv);
             session.AddToHistory("assistant", response.ToString());
         }
@@ -270,25 +310,25 @@ public sealed class AgentOrchestrator
 
         sb.AppendLine("You are an AI assistant specialized in answering questions based on provided context information. Follow these instructions strictly:");
         sb.AppendLine();
-        sb.AppendLine("## Core Instructions:");
-        sb.AppendLine("- **ONLY respond as the assistant** - never generate or fill in user messages, questions, or responses");
-        sb.AppendLine("- **Always format your response in markdown** with proper headings, lists, code blocks, and emphasis");
-        sb.AppendLine("- **Base your answers primarily on the provided context** - if context doesn't contain the answer, clearly state this");
-        sb.AppendLine("- **Cite sources explicitly** when referencing context information");
-        sb.AppendLine("- **Accept and process markdown-formatted input** from users");
-        sb.AppendLine();
-        sb.AppendLine("## Response Format Requirements:");
-        sb.AppendLine("- Use **bold** for emphasis and key points");
-        sb.AppendLine("- Use `code formatting` for technical terms, file names, and code snippets");
-        sb.AppendLine("- Use proper markdown headers (##, ###) to structure your response");
-        sb.AppendLine("- Use bullet points or numbered lists when presenting multiple items");
-        sb.AppendLine("- Include relevant code blocks with proper language specification when applicable");
-        sb.AppendLine();
-        sb.AppendLine("## Context Usage:");
-        sb.AppendLine("- Analyze the provided context thoroughly before responding");
-        sb.AppendLine("- Quote relevant portions using markdown blockquotes (>) when appropriate");
-        sb.AppendLine("- If multiple context sources conflict, acknowledge and explain the differences");
-        sb.AppendLine("- If context is insufficient, explicitly state what additional information would be needed");
+        // sb.AppendLine("## Core Instructions:");
+        // sb.AppendLine("- **ONLY respond as the assistant** - never generate or fill in user messages, questions, or responses");
+        // sb.AppendLine("- **Always format your response in markdown** with proper headings, lists, code blocks, and emphasis");
+        // sb.AppendLine("- **Base your answers primarily on the provided context** - if context doesn't contain the answer, clearly state this");
+        // sb.AppendLine("- **Cite sources explicitly** when referencing context information");
+        // sb.AppendLine("- **Accept and process markdown-formatted input** from users");
+        // sb.AppendLine();
+        // sb.AppendLine("## Response Format Requirements:");
+        // sb.AppendLine("- Use **bold** for emphasis and key points");
+        // sb.AppendLine("- Use `code formatting` for technical terms, file names, and code snippets");
+        // sb.AppendLine("- Use proper markdown headers (##, ###) to structure your response");
+        // sb.AppendLine("- Use bullet points or numbered lists when presenting multiple items");
+        // sb.AppendLine("- Include relevant code blocks with proper language specification when applicable");
+        // sb.AppendLine();
+        // sb.AppendLine("## Context Usage:");
+        // sb.AppendLine("- Analyze the provided context thoroughly before responding");
+        // sb.AppendLine("- Quote relevant portions using markdown blockquotes (>) when appropriate");
+        // sb.AppendLine("- If multiple context sources conflict, acknowledge and explain the differences");
+        // sb.AppendLine("- If context is insufficient, explicitly state what additional information would be needed");
         
         if (enableTools)
         {
@@ -334,25 +374,25 @@ public sealed class AgentOrchestrator
 
         sb.AppendLine("You are an AI assistant specialized in answering questions based on provided context information. Follow these instructions strictly:");
         sb.AppendLine();
-        sb.AppendLine("## Core Instructions:");
-        sb.AppendLine("- **ONLY respond as the assistant** - never generate or fill in user messages, questions, or responses");
-        sb.AppendLine("- **Always format your response in markdown** with proper headings, lists, code blocks, and emphasis");
-        sb.AppendLine("- **Base your answers primarily on the provided context** - if context doesn't contain the answer, clearly state this");
-        sb.AppendLine("- **Cite sources explicitly** when referencing context information");
-        sb.AppendLine("- **Accept and process markdown-formatted input** from users");
-        sb.AppendLine();
-        sb.AppendLine("## Response Format Requirements:");
-        sb.AppendLine("- Use **bold** for emphasis and key points");
-        sb.AppendLine("- Use `code formatting` for technical terms, file names, and code snippets");
-        sb.AppendLine("- Use proper markdown headers (##, ###) to structure your response");
-        sb.AppendLine("- Use bullet points or numbered lists when presenting multiple items");
-        sb.AppendLine("- Include relevant code blocks with proper language specification when applicable");
-        sb.AppendLine();
-        sb.AppendLine("## Context Usage:");
-        sb.AppendLine("- Analyze the provided context thoroughly before responding");
-        sb.AppendLine("- Quote relevant portions using markdown blockquotes (>) when appropriate");
-        sb.AppendLine("- If multiple context sources conflict, acknowledge and explain the differences");
-        sb.AppendLine("- If context is insufficient, explicitly state what additional information would be needed");
+        // sb.AppendLine("## Core Instructions:");
+        // sb.AppendLine("- **ONLY respond as the assistant** - never generate or fill in user messages, questions, or responses");
+        // sb.AppendLine("- **Always format your response in markdown** with proper headings, lists, code blocks, and emphasis");
+        // sb.AppendLine("- **Base your answers primarily on the provided context** - if context doesn't contain the answer, clearly state this");
+        // sb.AppendLine("- **Cite sources explicitly** when referencing context information");
+        // sb.AppendLine("- **Accept and process markdown-formatted input** from users");
+        // sb.AppendLine();
+        // sb.AppendLine("## Response Format Requirements:");
+        // sb.AppendLine("- Use **bold** for emphasis and key points");
+        // sb.AppendLine("- Use `code formatting` for technical terms, file names, and code snippets");
+        // sb.AppendLine("- Use proper markdown headers (##, ###) to structure your response");
+        // sb.AppendLine("- Use bullet points or numbered lists when presenting multiple items");
+        // sb.AppendLine("- Include relevant code blocks with proper language specification when applicable");
+        // sb.AppendLine();
+        // sb.AppendLine("## Context Usage:");
+        // sb.AppendLine("- Analyze the provided context thoroughly before responding");
+        // sb.AppendLine("- Quote relevant portions using markdown blockquotes (>) when appropriate");
+        // sb.AppendLine("- If multiple context sources conflict, acknowledge and explain the differences");
+        // sb.AppendLine("- If context is insufficient, explicitly state what additional information would be needed");
         
         if (enableTools)
         {

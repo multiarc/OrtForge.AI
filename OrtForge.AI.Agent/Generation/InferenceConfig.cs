@@ -19,7 +19,7 @@ public sealed record InferenceConfig
     
     public static InferenceConfig Default => new()
     {
-        Temperature = 0.7,
+        Temperature = 0.5,
         TopK = 40,
         TopP = 0.95,
         RepetitionPenalty = 1.1,  // FIXED: Add repetition penalty to prevent loops
