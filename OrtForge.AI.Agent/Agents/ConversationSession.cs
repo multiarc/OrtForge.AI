@@ -86,20 +86,8 @@ public sealed class ConversationSession : IDisposable
             var currentSeqLength = _kvState.AccumulatedSequenceLength;
             var totalSeqLength = currentSeqLength + inputIds.Length;
             
-            Console.WriteLine($"🔍 AddMessageAsync: role={role}, currentSeqLength={currentSeqLength}, inputLength={inputIds.Length}, totalSeqLength={totalSeqLength}");
-            
-            // Debug: Check actual tensor shapes before processing
-            var firstTensor = _kvState.Tensors.FirstOrDefault();
-            if (firstTensor.Value != null)
-            {
-                var shape = firstTensor.Value.GetTensorTypeAndShape().Shape;
-                Console.WriteLine($"🔍   Before: Sample tensor {firstTensor.Key}: shape=[{string.Join(",", shape)}]");
-            }
-            
             var outputs = await llmSession.RunOptimizedStep(inputIds, _kvState, 0, totalSeqLength);
             _kvState = outputs.KvCache;
-            
-            Console.WriteLine($"🔍 After processing: newSeqLength={_kvState.AccumulatedSequenceLength}");
             outputs.Dispose();
         }
         
@@ -109,33 +97,11 @@ public sealed class ConversationSession : IDisposable
 
     public KvState GetCurrentKvState()
     {
-        if (_kvState == null)
-            throw new InvalidOperationException("Session not initialized");
-            
-        // Debug: Check for tensor/metadata mismatch
-        Console.WriteLine($"🔍 GetCurrentKvState: AccumulatedSequenceLength={_kvState.AccumulatedSequenceLength}");
-        var firstTensor = _kvState.Tensors.FirstOrDefault();
-        if (firstTensor.Value != null)
-        {
-            var shape = firstTensor.Value.GetTensorTypeAndShape().Shape;
-            Console.WriteLine($"🔍   Sample tensor {firstTensor.Key}: shape=[{string.Join(",", shape)}]");
-        }
-        
-        return _kvState;
+        return _kvState ?? throw new InvalidOperationException("Session not initialized");
     }
 
     public void UpdateKvState(KvState newKvState)
     {
-        Console.WriteLine($"🔍 UpdateKvState: oldSeqLength={_kvState?.AccumulatedSequenceLength ?? 0}, newSeqLength={newKvState.AccumulatedSequenceLength}");
-        
-        // Debug: Check actual tensor shapes
-        var firstTensor = newKvState.Tensors.FirstOrDefault();
-        if (firstTensor.Value != null)
-        {
-            var shape = firstTensor.Value.GetTensorTypeAndShape().Shape;
-            Console.WriteLine($"🔍   Incoming tensor {firstTensor.Key}: shape=[{string.Join(",", shape)}]");
-        }
-        
         _kvState = newKvState;
     }
 

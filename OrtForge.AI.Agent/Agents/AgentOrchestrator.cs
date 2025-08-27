@@ -85,7 +85,7 @@ public sealed class AgentOrchestrator
         var currentSeqLength = session != null ? kv.AccumulatedSequenceLength : idsArray.Length;
         var toolState = new ToolCallState();
         
-        Console.WriteLine($"🔍 About to start generation: currentSeqLength={currentSeqLength}, idsArray.Length={idsArray.Length}, config.MaxTokens={config.MaxTokens}");
+
 
         int GetNextSample(LlamaSession.StepOutputs outputs, int vocab)
         {
@@ -124,8 +124,6 @@ public sealed class AgentOrchestrator
             return Sampling.Sample(logitsForSampling, config, previousTokensSpan);
         }
         
-        Console.WriteLine($"🔍 Entering generation loop: MaxTokens={config.MaxTokens}");
-        
         for (int step = 0; step < config.MaxTokens; step++)
         {
             // First step: use full prompt, subsequent steps: use only the last generated token
@@ -134,17 +132,6 @@ public sealed class AgentOrchestrator
             // Update sequence length for the tokens we're about to process
             var tokensToProcess = currentInput.Length;
             var totalSeqLen = currentSeqLength + tokensToProcess;
-            
-            if (step == 0 || step == 1 || step % 10 == 0)
-            {
-                Console.WriteLine($"🔍 Generation step {step}: currentSeqLength={currentSeqLength}, tokensToProcess={tokensToProcess}, totalSeqLen={totalSeqLen}");
-                var sampleTensor = kv.Tensors.FirstOrDefault();
-                if (sampleTensor.Value != null)
-                {
-                    var shape = sampleTensor.Value.GetTensorTypeAndShape().Shape;
-                    Console.WriteLine($"🔍   Input KV sample tensor {sampleTensor.Key}: shape=[{string.Join(",", shape)}]");
-                }
-            }
             
             var outputs = await _llm.RunOptimizedStep(currentInput, kv, step, totalSeqLen);
             var newKv = outputs.KvCache;
@@ -200,54 +187,18 @@ public sealed class AgentOrchestrator
             {
                 currentSeqLength = totalSeqLen;
             }
-
+            
             if (IsStopToken(nextId, config) || IsStopSequence(response.ToString(), config))
             {
-                Console.WriteLine($"🔍 Early break at step {step}: IsStopToken={IsStopToken(nextId, config)}, IsStopSequence={IsStopSequence(response.ToString(), config)}");
                 outputs.Dispose();
                 break;
-            }
-
-            if (step == 0 || step == 1 || step % 10 == 0)
-            {
-                Console.WriteLine($"🔍   Output KV AccumulatedSequenceLength={newKv.AccumulatedSequenceLength}");
-                var sampleTensor = newKv.Tensors.FirstOrDefault();
-                if (sampleTensor.Value != null)
-                {
-                    var shape = sampleTensor.Value.GetTensorTypeAndShape().Shape;
-                    Console.WriteLine($"🔍   Output KV sample tensor {sampleTensor.Key}: shape=[{string.Join(",", shape)}]");
-                }
             }
             
             outputs.Dispose();
         }
         
-        Console.WriteLine($"🔍 Generation loop completed: generatedTokens.Count={generatedTokens.Count}, response.Length={response.Length}");
-        Console.WriteLine($"🔍 Final loop KV: AccumulatedSequenceLength={kv.AccumulatedSequenceLength}, TensorCount={kv.Tensors.Count}");
-        
         if (session != null)
         {
-            Console.WriteLine($"🔍 ChatTurnAsync: About to update session with kv.AccumulatedSequenceLength={kv.AccumulatedSequenceLength}");
-            Console.WriteLine($"🔍   KV Tensors count: {kv.Tensors.Count}");
-            
-            var firstTensor = kv.Tensors.FirstOrDefault();
-            if (firstTensor.Value != null)
-            {
-                try
-                {
-                    var shape = firstTensor.Value.GetTensorTypeAndShape().Shape;
-                    Console.WriteLine($"🔍   Final sample tensor {firstTensor.Key}: shape=[{string.Join(",", shape)}]");
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"🔍   ERROR accessing tensor shape: {ex.Message}");
-                }
-            }
-            else
-            {
-                Console.WriteLine($"🔍   WARNING: firstTensor.Value is null!");
-            }
-            
             session.UpdateKvState(kv);
             session.AddToHistory("assistant", response.ToString());
         }
