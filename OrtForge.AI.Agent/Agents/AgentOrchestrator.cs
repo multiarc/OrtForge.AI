@@ -259,7 +259,7 @@ public sealed class AgentOrchestrator
         sb.AppendLine();
         
 
-        sb.AppendLine("You are an AI assistant specialized in answering questions based on provided context information. Follow these instructions strictly:");
+        sb.AppendLine("You are an AI assistant specialized in answering questions based on provided context information.");
         sb.AppendLine();
         // sb.AppendLine("## Core Instructions:");
         // sb.AppendLine("- **ONLY respond as the assistant** - never generate or fill in user messages, questions, or responses");
@@ -323,7 +323,7 @@ public sealed class AgentOrchestrator
         sb.AppendLine();
         
 
-        sb.AppendLine("You are an AI assistant specialized in answering questions based on provided context information. Follow these instructions strictly:");
+        sb.AppendLine("You are an AI assistant specialized in answering questions based on provided context information.");
         sb.AppendLine();
         // sb.AppendLine("## Core Instructions:");
         // sb.AppendLine("- **ONLY respond as the assistant** - never generate or fill in user messages, questions, or responses");
