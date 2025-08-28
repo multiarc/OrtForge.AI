@@ -12,11 +12,11 @@ public sealed class AgentOrchestrator
 {
     private readonly LlamaSession _llm;
     private readonly TokenizerService _tokenizer;
-    private readonly BgeM3Model _embeddings;
+    private readonly BgeM3Model? _embeddings;
     private readonly BgeRerankerM3? _reranker;
-    private readonly InMemoryVectorStore _vec;
+    private readonly InMemoryVectorStore? _vec;
 
-    public AgentOrchestrator(LlamaSession llm, TokenizerService tokenizer, BgeM3Model embeddings, InMemoryVectorStore vec, BgeRerankerM3? reranker = null)
+    public AgentOrchestrator(LlamaSession llm, TokenizerService tokenizer, BgeM3Model? embeddings = null, InMemoryVectorStore? vec = null, BgeRerankerM3? reranker = null)
     {
         _llm = llm;
         _tokenizer = tokenizer;
@@ -27,34 +27,45 @@ public sealed class AgentOrchestrator
 
     public async Task<string> ChatTurnAsync(string user, IReadOnlyList<(string role, string content)> history, InferenceConfig? config = null, Func<string, string>? toolExecutor = null, ConversationSession? session = null)
     {
-        config = LlamaOptimizations.GetOptimalConfigForModel(_llm.ModelName, config);
+        // Use pre-computed optimal config from LlamaSession, merging with any user-provided config
+        config = config != null ? MergeConfigs(_llm.OptimalConfig, config) : _llm.OptimalConfig;
+
+        List<string> retrieved;
         
-        var queryVec = await _embeddings.CreateEmbeddingAsync(user);
-        var candidateResults = _vec.TopK(queryVec, 10).ToList(); // Get more candidates for reranking
-        
-        var retrieved = candidateResults.Select(x => x.Text).ToList();
-        
-        // Apply reranking if available
-        if (_reranker != null && candidateResults.Count > 1)
+        if (_embeddings == null || _vec == null)
         {
-            var rerankedResults = new List<(float score, string text)>();
-            foreach (var candidate in candidateResults)
-            {
-                var score = await _reranker.GetRerankingScoreAsync(user, candidate.Text);
-                rerankedResults.Add((score: score, text: candidate.Text));
-            }
-            
-            // Sort by reranking score and take top 5
-            retrieved = rerankedResults
-                .OrderByDescending(x => x.score)
-                .Take(5)
-                .Select(x => x.text)
-                .ToList();
+            retrieved = [];
         }
         else
         {
-            // Fall back to similarity-based ranking, take top 5
-            retrieved = retrieved.Take(5).ToList();
+
+            var queryVec = await _embeddings.CreateEmbeddingAsync(user);
+            var candidateResults = _vec.TopK(queryVec, 10).ToList(); // Get more candidates for reranking
+
+            retrieved = candidateResults.Select(x => x.Text).ToList();
+
+            // Apply reranking if available
+            if (_reranker != null && candidateResults.Count > 1)
+            {
+                var rerankedResults = new List<(float score, string text)>();
+                foreach (var candidate in candidateResults)
+                {
+                    var score = await _reranker.GetRerankingScoreAsync(user, candidate.Text);
+                    rerankedResults.Add((score: score, text: candidate.Text));
+                }
+
+                // Sort by reranking score and take top 5
+                retrieved = rerankedResults
+                    .OrderByDescending(x => x.score)
+                    .Take(5)
+                    .Select(x => x.text)
+                    .ToList();
+            }
+            else
+            {
+                // Fall back to similarity-based ranking, take top 5
+                retrieved = retrieved.Take(5).ToList();
+            }
         }
 
         KvState kv;
@@ -84,6 +95,7 @@ public sealed class AgentOrchestrator
         var generatedTokens = new List<int>();
         var currentSeqLength = session != null ? kv.AccumulatedSequenceLength : idsArray.Length;
         var toolState = new ToolCallState();
+        var recentTokensForStopCheck = new StringBuilder(); // Track recent text for incremental stop sequence detection
         
 
 
@@ -91,6 +103,8 @@ public sealed class AgentOrchestrator
         {
             var span = outputs.GetLogitsSpan();
             var logitsShape = outputs.Logits.GetTensorTypeAndShape().Shape;
+            
+
             
             // For logits shape [batch, seq_len, vocab], we need the last token's logits
             Span<float> logitsForSampling;
@@ -116,8 +130,15 @@ public sealed class AgentOrchestrator
             }
             else
             {
-                // Fallback: assume span is already the right size [vocab]
-                logitsForSampling = span;
+                // Fallback: Use last vocab_size elements if span is larger than vocab, or entire span if smaller
+                if (span.Length >= vocab)
+                {
+                    logitsForSampling = span.Slice(span.Length - vocab, vocab);
+                }
+                else
+                {
+                    logitsForSampling = span;
+                }
             }
             
             var previousTokensSpan = generatedTokens.Count > 0 ? generatedTokens.ToArray().AsSpan() : ReadOnlySpan<int>.Empty;
@@ -149,6 +170,13 @@ public sealed class AgentOrchestrator
             Console.Write(tokenText);
             
             response.Append(tokenText);
+            recentTokensForStopCheck.Append(tokenText);
+            
+            // Keep only recent text for stop sequence checking (last 100 chars to be safe)
+            if (recentTokensForStopCheck.Length > 100)
+            {
+                recentTokensForStopCheck.Remove(0, recentTokensForStopCheck.Length - 100);
+            }
             
             bool toolExecutionOccurred = false;
             if (toolExecutor != null)
@@ -188,7 +216,8 @@ public sealed class AgentOrchestrator
                 currentSeqLength = totalSeqLen;
             }
             
-            if (IsStopToken(nextId, config) || IsStopSequence(response.ToString(), config))
+            // Check for stop conditions
+            if (IsStopToken(nextId, config) || IsStopSequence(recentTokensForStopCheck.ToString(), config))
             {
                 outputs.Dispose();
                 break;
@@ -213,6 +242,31 @@ public sealed class AgentOrchestrator
         }
 
         return response.ToString();
+    }
+    
+    /// <summary>
+    /// Efficiently merge user config with pre-computed optimal config
+    /// </summary>
+    private static InferenceConfig MergeConfigs(InferenceConfig optimalConfig, InferenceConfig userConfig)
+    {
+        return optimalConfig with
+        {
+            Temperature = userConfig.Temperature,
+            TopK = userConfig.TopK,
+            TopP = userConfig.TopP,
+            RepetitionPenalty = userConfig.RepetitionPenalty,
+            FrequencyPenalty = userConfig.FrequencyPenalty,
+            PresencePenalty = userConfig.PresencePenalty,
+            MaxTokens = userConfig.MaxTokens,
+            Seed = userConfig.Seed,
+            UseGreedy = userConfig.UseGreedy,
+            MinP = userConfig.MinP,
+            TfsZ = userConfig.TfsZ,
+            TypicalP = userConfig.TypicalP,
+            // Keep optimal stop tokens and sequences (don't override these)
+            StopTokenIds = optimalConfig.StopTokenIds.Concat(userConfig.StopTokenIds).ToHashSet(),
+            StopSequences = optimalConfig.StopSequences.Concat(userConfig.StopSequences).ToArray()
+        };
     }
 
     internal static bool IsStopToken(int tokenId, InferenceConfig config) => config.StopTokenIds.Contains(tokenId);

@@ -1,19 +1,30 @@
 using System.Runtime.InteropServices;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
+using OrtForge.AI.Agent.Generation;
 
 namespace OrtForge.AI.Agent.LLM;
 
 public sealed class LlamaSession : IDisposable
 {
     private readonly InferenceSession _session;
-    
-    public LlamaSession(InferenceSession session)
+
+    public LlamaSession(InferenceSession session, ModelType modelType = ModelType.Default)
     {
         _session = session;
+        ModelType = modelType;
+        // Pre-compute optimal configuration once during initialization
+        OptimalConfig = LlamaOptimizations.GetOptimalConfigForModel(modelType);
     }
 
-    public string ModelName { get; init; } = "default";
+    public ModelType ModelType { get; }
+    public InferenceConfig OptimalConfig { get; }
+    
+    /// <summary>
+    /// Legacy property for backwards compatibility
+    /// </summary>
+    [Obsolete("Use ModelType property instead")]
+    public string ModelName => ModelType.ToModelKey();
 
     public void Dispose()
     {
@@ -397,9 +408,9 @@ public sealed class LlamaSession : IDisposable
 
     public async Task<StepOutputs> RunOptimizedStepAsync(long[] inputIds, KvState kv, int currentStep, int sequenceLength, CancellationToken cancellationToken = default)
     {
-        var positionIds = LlamaOptimizations.CreateOptimalPositionIds(sequenceLength, currentStep, ModelName);
+        var positionIds = LlamaOptimizations.CreateOptimalPositionIds(sequenceLength, currentStep, ModelType);
         // CRITICAL FIX: Use total sequence length for attention mask, not just current input length
-        var attentionMask = LlamaOptimizations.CreateOptimalAttentionMask(sequenceLength, ModelName);
+        var attentionMask = LlamaOptimizations.CreateOptimalAttentionMask(sequenceLength, ModelType);
         
         using var inputs = StepInputs.Create(inputIds, kv, positionIds, attentionMask);
         return await RunStepAsync(inputs, cancellationToken);

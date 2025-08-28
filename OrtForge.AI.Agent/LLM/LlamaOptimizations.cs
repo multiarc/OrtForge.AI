@@ -4,46 +4,53 @@ namespace OrtForge.AI.Agent.LLM;
 
 public static class LlamaOptimizations
 {
-    public static readonly Dictionary<string, int[]> ModelStopTokens = new()
+    public static readonly Dictionary<ModelType, int[]> ModelStopTokens = new()
     {
-        ["llama-3.1"] = new[] { 128001, 128009 },
-        ["llama-3.2"] = new[] { 128001, 128009 },
-        ["llama-3"] = new[] { 128001, 128009 },
-        ["llama-2"] = new[] { 2 },
-        ["default"] = new[] { 0, 2 }
+        [ModelType.Llama3_1] = new[] { 128001, 128009 },
+        [ModelType.Llama3_2] = new[] { 128001, 128009 },
+        [ModelType.Llama3] = new[] { 128001, 128009 },
+        [ModelType.Llama2] = new[] { 2 },
+        [ModelType.Default] = new[] { 0, 2 }
     };
 
-    public static readonly Dictionary<string, string[]> ModelStopSequences = new()
+    public static readonly Dictionary<ModelType, string[]> ModelStopSequences = new()
     {
-        ["llama-3.1"] = new[] { "<|eot_id|>", "<|end_of_text|>" },
-        ["llama-3.2"] = new[] { "<|eot_id|>", "<|end_of_text|>" },
-        ["llama-3"] = new[] { "<|eot_id|>", "<|end_of_text|>" },
-        ["llama-2"] = new[] { "</s>" },
-        ["default"] = Array.Empty<string>()
+        [ModelType.Llama3_1] = new[] { "<|eot_id|>", "<|end_of_text|>" },
+        [ModelType.Llama3_2] = new[] { "<|eot_id|>", "<|end_of_text|>" },
+        [ModelType.Llama3] = new[] { "<|eot_id|>", "<|end_of_text|>" },
+        [ModelType.Llama2] = new[] { "</s>" },
+        [ModelType.Default] = Array.Empty<string>()
     };
 
-    public static InferenceConfig GetOptimalConfigForModel(string modelName, InferenceConfig? baseConfig = null)
+    public static InferenceConfig GetOptimalConfigForModel(ModelType modelType, InferenceConfig? baseConfig = null)
     {
         baseConfig ??= InferenceConfig.Default;
         
-        var modelKey = GetModelKey(modelName);
-        var stopTokenIds = ModelStopTokens.GetValueOrDefault(modelKey, ModelStopTokens["default"]);
-        var stopSequences = ModelStopSequences.GetValueOrDefault(modelKey, ModelStopSequences["default"]);
+        var stopTokenIds = ModelStopTokens.GetValueOrDefault(modelType, ModelStopTokens[ModelType.Default]);
+        var stopSequences = ModelStopSequences.GetValueOrDefault(modelType, ModelStopSequences[ModelType.Default]);
 
         return baseConfig with
         {
             StopTokenIds = new HashSet<int>(stopTokenIds.Concat(baseConfig.StopTokenIds)),
             StopSequences = stopSequences.Concat(baseConfig.StopSequences).ToArray(),
-            Temperature = IsLlama3Family(modelKey) ? Math.Max(0.1, baseConfig.Temperature) : baseConfig.Temperature,
-            TopP = IsLlama3Family(modelKey) ? Math.Min(0.95, baseConfig.TopP) : baseConfig.TopP
+            Temperature = modelType.IsLlama3Family() ? Math.Max(0.1, baseConfig.Temperature) : baseConfig.Temperature,
+            TopP = modelType.IsLlama3Family() ? Math.Min(0.95, baseConfig.TopP) : baseConfig.TopP
         };
     }
-
-    public static long[]? CreateOptimalPositionIds(int sequenceLength, int currentStep, string modelName)
+    
+    /// <summary>
+    /// Backwards compatibility method - converts string to enum and calls optimized version
+    /// </summary>
+    [Obsolete("Use GetOptimalConfigForModel(ModelType, InferenceConfig) instead for better performance")]
+    public static InferenceConfig GetOptimalConfigForModel(string modelName, InferenceConfig? baseConfig = null)
     {
-        var modelKey = GetModelKey(modelName);
-        
-        if (!RequiresPositionIds(modelKey))
+        var modelType = ModelTypeExtensions.ParseFromString(modelName);
+        return GetOptimalConfigForModel(modelType, baseConfig);
+    }
+
+    public static long[]? CreateOptimalPositionIds(int sequenceLength, int currentStep, ModelType modelType)
+    {
+        if (!RequiresPositionIds(modelType))
         {
             return null;
         }
@@ -67,11 +74,9 @@ public static class LlamaOptimizations
         }
     }
 
-    public static long[]? CreateOptimalAttentionMask(int totalSequenceLength, string modelName)
+    public static long[]? CreateOptimalAttentionMask(int totalSequenceLength, ModelType modelType)
     {
-        var modelKey = GetModelKey(modelName);
-        
-        if (!RequiresAttentionMask(modelKey))
+        if (!RequiresAttentionMask(modelType))
         {
             return null;
         }
@@ -81,77 +86,65 @@ public static class LlamaOptimizations
         return attentionMask;
     }
 
-    public static int GetOptimalKvCacheSize(string modelName, int maxSequenceLength)
+    public static int GetOptimalKvCacheSize(ModelType modelType, int maxSequenceLength)
     {
-        var modelKey = GetModelKey(modelName);
-        
-        return modelKey switch
+        return modelType switch
         {
-            "llama-3.1" or "llama-3.2" => Math.Min(maxSequenceLength, 131072),
-            "llama-3" => Math.Min(maxSequenceLength, 8192),
-            "llama-2" => Math.Min(maxSequenceLength, 4096),
+            ModelType.Llama3_1 or ModelType.Llama3_2 => Math.Min(maxSequenceLength, 131072),
+            ModelType.Llama3 => Math.Min(maxSequenceLength, 8192),
+            ModelType.Llama2 => Math.Min(maxSequenceLength, 4096),
             _ => maxSequenceLength
         };
     }
 
-    public static bool ShouldUseGQA(string modelName)
+    public static bool ShouldUseGQA(ModelType modelType)
     {
-        var modelKey = GetModelKey(modelName);
-        return IsLlama3Family(modelKey);
+        return modelType.IsLlama3Family();
     }
 
-    public static int GetOptimalBatchSize(string modelName)
+    public static int GetOptimalBatchSize(ModelType modelType)
     {
-        var modelKey = GetModelKey(modelName);
-        
-        return modelKey switch
+        return modelType switch
         {
-            "llama-3.1" or "llama-3.2" => 1,
-            "llama-3" => 1,
-            "llama-2" => 2,
+            ModelType.Llama3_1 or ModelType.Llama3_2 => 1,
+            ModelType.Llama3 => 1,
+            ModelType.Llama2 => 2,
             _ => 1
         };
     }
 
+    // Legacy methods kept for backwards compatibility
+    [Obsolete("Use ModelType enum instead of string parsing")]
     private static string GetModelKey(string modelName)
     {
-        var lower = modelName.ToLowerInvariant();
-        
-        if (lower.Contains("llama-3.2") || lower.Contains("llama3.2"))
-            return "llama-3.2";
-        if (lower.Contains("llama-3.1") || lower.Contains("llama3.1"))
-            return "llama-3.1";
-        if (lower.Contains("llama-3") || lower.Contains("llama3"))
-            return "llama-3";
-        if (lower.Contains("llama-2") || lower.Contains("llama2"))
-            return "llama-2";
-        
-        return "default";
+        return ModelTypeExtensions.ParseFromString(modelName).ToModelKey();
     }
 
+    [Obsolete("Use ModelType.IsLlama3Family() extension method instead")]
     private static bool IsLlama3Family(string modelKey)
     {
-        return modelKey is "llama-3" or "llama-3.1" or "llama-3.2";
+        var modelType = ModelTypeExtensions.ParseFromString(modelKey);
+        return modelType.IsLlama3Family();
     }
 
-    private static bool RequiresPositionIds(string modelKey)
+    private static bool RequiresPositionIds(ModelType modelType)
     {
-        return modelKey switch
+        return modelType switch
         {
-            "llama-3.1" or "llama-3.2" => true,  // Fixed: provide position IDs for proper generation
-            "llama-3" => true,                   // Fixed: provide position IDs for proper generation
-            "llama-2" => true,
+            ModelType.Llama3_1 or ModelType.Llama3_2 => true,  // Provide position IDs for proper generation
+            ModelType.Llama3 => true,                           // Provide position IDs for proper generation
+            ModelType.Llama2 => true,
             _ => true  // Default to providing position IDs
         };
     }
 
-    private static bool RequiresAttentionMask(string modelKey)
+    private static bool RequiresAttentionMask(ModelType modelType)
     {
-        return modelKey switch
+        return modelType switch
         {
-            "llama-3.1" or "llama-3.2" => true,
-            "llama-3" => true,
-            "llama-2" => true,
+            ModelType.Llama3_1 or ModelType.Llama3_2 => true,
+            ModelType.Llama3 => true,
+            ModelType.Llama2 => true,
             _ => true
         };
     }
