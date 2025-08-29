@@ -14,17 +14,17 @@ public sealed record InferenceConfig
     public double MinP { get; init; } = 0.0;
     public double TfsZ { get; init; } = 1.0;
     public double TypicalP { get; init; } = 1.0;
-    public HashSet<int> StopTokenIds { get; init; } = new() { 0, 2 };
-    public string[] StopSequences { get; init; } = Array.Empty<string>();
+    public HashSet<int> StopTokenIds { get; init; } = [0, 2];
+    public string[] StopSequences { get; init; } = [];
     
     public static InferenceConfig Default => new()
     {
         Temperature = 0.5,
         TopK = 40,
         TopP = 0.95,
-        RepetitionPenalty = 1.1,  // FIXED: Add repetition penalty to prevent loops
-        FrequencyPenalty = 0.1,   // FIXED: Add frequency penalty to reduce repetition
-        PresencePenalty = 0.1     // FIXED: Add presence penalty to encourage diversity
+        RepetitionPenalty = 1.1, 
+        FrequencyPenalty = 0.1,
+        PresencePenalty = 0.1
     };
     
     public static InferenceConfig Greedy => new()

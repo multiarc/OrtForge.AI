@@ -3,18 +3,28 @@ using Microsoft.ML.OnnxRuntime;
 namespace OrtForge.AI.Agent.LLM;
 
 /// <summary>
-/// Simplified KV cache state that holds tensor references.
-/// ONNX Runtime's allocator handles memory pooling and reuse efficiently.
+/// Centralized KV cache state with authoritative sequence length management.
+/// This is the single source of truth for sequence length tracking.
 /// </summary>
 public sealed class KvState : IDisposable
 {
     public readonly Dictionary<string, OrtValue> Tensors = new();
+    private int _accumulatedSequenceLength;
     
     /// <summary>
-    /// Tracks the accumulated sequence length for proper KV cache sizing.
-    /// This is the total length of all tokens processed so far.
+    /// The authoritative sequence length - total tokens processed so far.
+    /// This is the single source of truth for all sequence length calculations.
     /// </summary>
-    public int AccumulatedSequenceLength { get; private set; }
+    public int AccumulatedSequenceLength 
+    { 
+        get => _accumulatedSequenceLength;
+        private set 
+        { 
+            if (value < 0)
+                throw new ArgumentException("Sequence length cannot be negative", nameof(value));
+            _accumulatedSequenceLength = value;
+        }
+    }
 
     public KvState(int initialSequenceLength = 0)
     {
@@ -25,19 +35,27 @@ public sealed class KvState : IDisposable
     {
         Tensors[name] = tensor;
     }
-        
-    public OrtValue? GetTensor(string name)
+    
+    /// <summary>
+    /// Calculate the total sequence length after adding new tokens
+    /// </summary>
+    /// <param name="newTokenCount">Number of new tokens to add</param>
+    /// <returns>The total sequence length after adding new tokens</returns>
+    public int CalculateTotalLengthAfterTokens(int newTokenCount)
     {
-        return Tensors.GetValueOrDefault(name);
+        if (newTokenCount < 0)
+            throw new ArgumentException("New token count cannot be negative", nameof(newTokenCount));
+        return AccumulatedSequenceLength + newTokenCount;
     }
     
     /// <summary>
-    /// Updates the accumulated sequence length after processing tokens.
+    /// Validate that the KV state sequence length matches expected value
     /// </summary>
-    /// <param name="additionalTokens">Number of tokens processed in this step</param>
-    public void UpdateSequenceLength(int additionalTokens)
+    /// <param name="expectedLength">Expected sequence length</param>
+    /// <returns>True if lengths match</returns>
+    public bool ValidateSequenceLength(int expectedLength)
     {
-        AccumulatedSequenceLength += additionalTokens;
+        return AccumulatedSequenceLength == expectedLength;
     }
     
     public void Dispose()

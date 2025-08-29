@@ -8,7 +8,7 @@ namespace OrtForge.AI.Agent.Agents;
 public sealed class ConversationSession : IDisposable
 {
     private readonly TokenizerService _tokenizer;
-    private readonly List<(string role, string content)> _history = new();
+    private readonly List<(string role, string content)> _history = [];
     private KvState? _kvState;
 
     private bool _isSystemPromptProcessed = false;
@@ -19,8 +19,8 @@ public sealed class ConversationSession : IDisposable
     public bool IsInitialized => _isSystemPromptProcessed;
     
 
-    public int MaxHistoryLength { get; set; } = 20; // Keep last N messages
-    public int MaxTokensBeforeTruncation { get; set; } = 4096; // Truncate when approaching context limit
+    public int MaxHistoryLength { get; set; } = 20;
+    public int MaxTokensBeforeTruncation { get; set; } = 2048;
     public bool EnableSummarization { get; set; } = true;
 
     public ConversationSession(TokenizerService tokenizer)
@@ -83,8 +83,8 @@ public sealed class ConversationSession : IDisposable
         if (llmSession != null)
         {
             var inputIds = messageTokens.Select(id => (long)id).ToArray();
-            var currentSeqLength = _kvState.AccumulatedSequenceLength;
-            var totalSeqLength = currentSeqLength + inputIds.Length;
+            // Use centralized sequence length calculation from KvState
+            var totalSeqLength = _kvState.CalculateTotalLengthAfterTokens(inputIds.Length);
             
             var outputs = await llmSession.RunOptimizedStep(inputIds, _kvState, 0, totalSeqLength);
             _kvState = outputs.KvCache;
@@ -127,7 +127,6 @@ public sealed class ConversationSession : IDisposable
         }
         else
         {
-            // Simple truncation - keep only recent messages
             SimpleTruncate();
         }
     }

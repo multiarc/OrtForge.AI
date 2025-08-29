@@ -8,27 +8,45 @@ namespace OrtForge.AI.Agent.LLM;
 public sealed class LlamaSession : IDisposable
 {
     private readonly InferenceSession _session;
+    private readonly KvMappingFormat _kvMappingFormat;
+    private readonly KvMappingValidationResult _kvMappingValidation;
 
     public LlamaSession(InferenceSession session, ModelType modelType = ModelType.Default)
     {
         _session = session;
         ModelType = modelType;
-        // Pre-compute optimal configuration once during initialization
         OptimalConfig = LlamaOptimizations.GetOptimalConfigForModel(modelType);
+        
+        _kvMappingFormat = KvTensorMappingStrategy.DetectFormat(_session.InputMetadata, _session.OutputMetadata);
+        _kvMappingValidation = KvTensorMappingStrategy.ValidateMapping(
+            _session.InputMetadata, _session.OutputMetadata, _kvMappingFormat);
+            
+        LogKvMappingValidation();
     }
 
     public ModelType ModelType { get; }
     public InferenceConfig OptimalConfig { get; }
-    
-    /// <summary>
-    /// Legacy property for backwards compatibility
-    /// </summary>
-    [Obsolete("Use ModelType property instead")]
-    public string ModelName => ModelType.ToModelKey();
-
     public void Dispose()
     {
         _session.Dispose();
+    }
+    
+    private void LogKvMappingValidation()
+    {
+        Console.WriteLine($"KV Mapping Format Detected: {_kvMappingFormat}");
+        
+        if (!_kvMappingValidation.IsValid)
+        {
+            Console.WriteLine("⚠️  KV Mapping Validation Issues:");
+            foreach (var issue in _kvMappingValidation.Issues)
+            {
+                Console.WriteLine($"   - {issue}");
+            }
+        }
+        else
+        {
+            Console.WriteLine($"✅ KV Mapping Validated: {_kvMappingValidation.MappedPairs.Count} tensor pairs mapped successfully");
+        }
     }
     
     private static TensorElementType GetTensorElementType(Type type)
@@ -107,8 +125,6 @@ public sealed class LlamaSession : IDisposable
                 
                 case TensorElementType.Float16:
                 case TensorElementType.BFloat16:
-                    // For 16-bit types, we need to convert to float first
-                    // This requires allocation, so performance is similar to GetLogitsArray()
                     return GetLogitsArray().AsSpan();
                 
                 default:
@@ -130,7 +146,6 @@ public sealed class LlamaSession : IDisposable
                     }
                 case TensorElementType.Float16:
                     {
-                        // Follow ModelHostBase pattern for Float16 handling
                         var byteSpan = Logits.GetTensorMutableDataAsSpan<byte>();
                         var halfSpan = MemoryMarshal.Cast<byte, Half>(byteSpan);
                         var array = GC.AllocateUninitializedArray<float>(halfSpan.Length);
@@ -139,13 +154,10 @@ public sealed class LlamaSession : IDisposable
                             array[i] = (float)halfSpan[i];
                         }
                         
-
-                        
                         return array;
                     }
                 case TensorElementType.BFloat16:
                     {
-                        // Follow ModelHostBase pattern for BFloat16 handling
                         var byteSpan = Logits.GetTensorMutableDataAsSpan<byte>();
                         var bfloatSpan = MemoryMarshal.Cast<byte, BFloat16>(byteSpan);
                         var array = GC.AllocateUninitializedArray<float>(bfloatSpan.Length);
@@ -166,13 +178,11 @@ public sealed class LlamaSession : IDisposable
         var inputMetadataKeys = _session.InputMetadata.Keys;
         var outputMetadata = _session.OutputMetadata;
         
-        // Get input dimensions used throughout the method
         var inputShape = inputs.InputIds.GetTensorTypeAndShape().Shape;
         var batchSize = inputShape[0];
         var currentInputLength = inputShape[1];  // Length of current input tokens
         
-        // Calculate total sequence length for KV cache allocation
-        var totalSequenceLength = inputs.Kv.AccumulatedSequenceLength + currentInputLength;
+        var totalSequenceLength = inputs.Kv.CalculateTotalLengthAfterTokens((int)currentInputLength);
         
 
         
@@ -225,7 +235,6 @@ public sealed class LlamaSession : IDisposable
             }
             else
             {
-                // Create default attention mask (all 1s) - must match total sequence length
                 var defaultAttentionMask = new long[totalSequenceLength];
                 Array.Fill(defaultAttentionMask, 1L);
                 var attentionMaskOrt = OrtValue.CreateTensorValueFromMemory(defaultAttentionMask, [1, totalSequenceLength]);
@@ -234,7 +243,6 @@ public sealed class LlamaSession : IDisposable
             inputNamesList.Add("attention_mask");
         }
 
-        // Handle KV cache inputs - create empty tensors for missing ones on first step
         var providedKvInputs = new HashSet<string>();
         
         if (inputs.Kv.Tensors.Count > 0)
@@ -254,7 +262,17 @@ public sealed class LlamaSession : IDisposable
                 
                 if (targetName == null)
                 {
-                    targetName = MapKvNameToInput(kv.Key, inputMetadataKeys);
+                    targetName = KvTensorMappingStrategy.MapOutputToInput(
+                        kv.Key, _kvMappingFormat, inputMetadataKeys.ToList());
+                    
+                    if (targetName != null)
+                    {
+                        Console.WriteLine($"🔗 Mapped KV tensor: {kv.Key} → {targetName}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"❌ Failed to map KV tensor: {kv.Key}");
+                    }
                 }
                 
                 if (targetName == null) continue;
@@ -267,8 +285,6 @@ public sealed class LlamaSession : IDisposable
             }
         }
         
-        // Create empty KV cache tensors for any missing KV inputs (first step)
-        
         foreach (var inputName in inputMetadataKeys)
         {
             if ((inputName.Contains("past") || inputName.Contains("key") || inputName.Contains("value")) && 
@@ -279,7 +295,6 @@ public sealed class LlamaSession : IDisposable
                 var inputMeta = _session.InputMetadata[inputName];
                 var kvDims = inputMeta.Dimensions.ToArray();
                 
-                // Replace symbolic dimensions
                 for (int i = 0; i < kvDims.Length; i++)
                 {
                     if (kvDims[i] < 0)
@@ -287,7 +302,7 @@ public sealed class LlamaSession : IDisposable
                         if (i == 0) 
                             kvDims[i] = (int)batchSize;
                         else if (i == 2) 
-                            kvDims[i] = 0; // Sequence length starts at 0 for empty cache
+                            kvDims[i] = 0;
                     }
                 }
                 
@@ -323,21 +338,18 @@ public sealed class LlamaSession : IDisposable
                 var kvDims = output.Value.Dimensions.ToArray();
                 for (int i = 0; i < kvDims.Length; i++)
                 {
-                    if (kvDims[i] < 0) // Replace symbolic dimensions
+                    if (kvDims[i] < 0)
                     {
                         if (i == 0) kvDims[i] = (int)batchSize;
                         else if (i == 2) 
                         {
                             if (inputs.Kv.Tensors.Count == 0)
                             {
-                                // First step (prefill) - use current input length
                                 kvDims[i] = (int)currentInputLength;
 
                             }
                             else
                             {
-                                // FIXED: For subsequent steps, KV cache grows with each new token
-                                // Output KV cache should have total accumulated sequence length
                                 kvDims[i] = (int)totalSequenceLength;
                             }
                         }
@@ -347,7 +359,6 @@ public sealed class LlamaSession : IDisposable
                 
 
                 
-                // Direct allocation - let ONNX Runtime handle memory pooling efficiently
                 var kvTensor = OrtValue.CreateAllocatedTensorValue(
                     OrtAllocator.DefaultInstance, 
                     GetTensorElementType(output.Value.ElementType), 
@@ -373,10 +384,7 @@ public sealed class LlamaSession : IDisposable
             throw new InvalidOperationException($"Error running the model: {ex.Message}", ex);
         }
 
-        // Create new KvState with updated sequence length
-        // Always increment the accumulated length by the tokens we just processed
-        var newAccumulatedLength = (int)totalSequenceLength;
-        var newKv = new KvState(newAccumulatedLength);
+        var newKv = new KvState((int)totalSequenceLength);
 
         OrtValue? logits = null;
         
@@ -392,10 +400,14 @@ public sealed class LlamaSession : IDisposable
             else
             {
                 newKv.AddTensor(outputName, outputTensor);
-                var alias = MapKvOutputToPastAlias(outputName);
+                var availableInputNames = _session.InputMetadata.Keys.Where(name => 
+                    name.Contains("past") || name.Contains("key") || name.Contains("value")).ToList();
+                var alias = KvTensorMappingStrategy.MapInputToOutput(outputName, _kvMappingFormat, availableInputNames);
+                
                 if (alias != null)
                 {
                     newKv.AddTensor(alias, outputTensor);
+                    Console.WriteLine($"🔗 Created KV alias: {outputName} → {alias}");
                 }
             }
         }
@@ -408,9 +420,8 @@ public sealed class LlamaSession : IDisposable
 
     public async Task<StepOutputs> RunOptimizedStepAsync(long[] inputIds, KvState kv, int currentStep, int sequenceLength, CancellationToken cancellationToken = default)
     {
-        var positionIds = LlamaOptimizations.CreateOptimalPositionIds(sequenceLength, currentStep, ModelType);
-        // CRITICAL FIX: Use total sequence length for attention mask, not just current input length
-        var attentionMask = LlamaOptimizations.CreateOptimalAttentionMask(sequenceLength, ModelType);
+        var positionIds = LlamaOptimizations.CreateOptimalPositionIds(sequenceLength, currentStep);
+        var attentionMask = LlamaOptimizations.CreateOptimalAttentionMask(sequenceLength);
         
         using var inputs = StepInputs.Create(inputIds, kv, positionIds, attentionMask);
         return await RunStepAsync(inputs, cancellationToken);
@@ -420,90 +431,4 @@ public sealed class LlamaSession : IDisposable
     {
         return await RunOptimizedStepAsync(inputIds, kv, currentStep, sequenceLength, CancellationToken.None);
     }
-
-    
-    private sealed class DisposableOrtValueList : IDisposable
-    {
-        private readonly IEnumerable<OrtValue> _values;
-        
-        public DisposableOrtValueList(IEnumerable<OrtValue> values)
-        {
-            _values = values;
-        }
-        
-        public void Dispose()
-        {
-            foreach (var value in _values)
-            {
-                value?.Dispose();
-            }
-        }
-    }
-
-    private static string? MapKvNameToInput(string outputLikeName, IEnumerable<string> inputNames)
-    {
-        var inputNamesSet = inputNames.ToHashSet();
-        
-        if (outputLikeName.StartsWith("present_key_values", StringComparison.Ordinal))
-        {
-            var candidate = "past_" + outputLikeName.Substring("present_".Length);
-            if (inputNamesSet.Contains(candidate)) return candidate;
-        }
-        
-        if (outputLikeName.StartsWith("present.", StringComparison.Ordinal))
-        {
-            var candidate = "past_key_values" + outputLikeName.Substring("present".Length);
-            if (inputNamesSet.Contains(candidate)) return candidate;
-            
-            candidate = "past" + outputLikeName.Substring("present".Length);
-            if (inputNamesSet.Contains(candidate)) return candidate;
-        }
-        
-        if (outputLikeName.Contains("present"))
-        {
-            var candidate = outputLikeName.Replace("present", "past");
-            if (inputNamesSet.Contains(candidate)) return candidate;
-            
-            candidate = outputLikeName.Replace("present", "past_key_values");
-            if (inputNamesSet.Contains(candidate)) return candidate;
-        }
-        
-        foreach (var inputName in inputNamesSet)
-        {
-            if (inputName.Contains("past") && outputLikeName.Contains("present"))
-            {
-                var baseName = outputLikeName.Replace("present", "").Replace("_", "").Replace(".", "");
-                var inputBaseName = inputName.Replace("past", "").Replace("_", "").Replace(".", "").Replace("key", "").Replace("values", "");
-                if (baseName.Contains(inputBaseName) || inputBaseName.Contains(baseName))
-                {
-                    return inputName;
-                }
-            }
-        }
-        
-        return null;
-    }
-
-    private static string? MapKvOutputToPastAlias(string outputName)
-    {
-        if (outputName.StartsWith("present_key_values", StringComparison.Ordinal))
-        {
-            return "past_" + outputName.Substring("present_".Length);
-        }
-        
-        if (outputName.StartsWith("present.", StringComparison.Ordinal))
-        {
-            return "past" + outputName.Substring("present".Length);
-        }
-        
-        if (outputName.Contains("present"))
-        {
-            return outputName.Replace("present", "past");
-        }
-        
-        return null;
-    }
-
-
-
 }

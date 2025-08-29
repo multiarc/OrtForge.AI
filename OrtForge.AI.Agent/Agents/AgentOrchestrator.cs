@@ -4,6 +4,7 @@ using OrtForge.AI.Agent.Generation;
 using OrtForge.AI.Agent.LLM;
 using OrtForge.AI.Agent.Rag;
 using OrtForge.AI.Agent.Tokenization;
+using OrtForge.AI.Agent.Tools;
 using OrtForge.AI.Models.Models;
 
 namespace OrtForge.AI.Agent.Agents;
@@ -15,6 +16,7 @@ public sealed class AgentOrchestrator
     private readonly BgeM3Model? _embeddings;
     private readonly BgeRerankerM3? _reranker;
     private readonly InMemoryVectorStore? _vec;
+    private readonly ToolInjectionManager _toolInjectionManager;
 
     public AgentOrchestrator(LlamaSession llm, TokenizerService tokenizer, BgeM3Model? embeddings = null, InMemoryVectorStore? vec = null, BgeRerankerM3? reranker = null)
     {
@@ -23,11 +25,11 @@ public sealed class AgentOrchestrator
         _embeddings = embeddings;
         _reranker = reranker;
         _vec = vec;
+        _toolInjectionManager = new ToolInjectionManager(tokenizer);
     }
 
     public async Task<string> ChatTurnAsync(string user, IReadOnlyList<(string role, string content)> history, InferenceConfig? config = null, Func<string, string>? toolExecutor = null, ConversationSession? session = null)
     {
-        // Use pre-computed optimal config from LlamaSession, merging with any user-provided config
         config = config != null ? MergeConfigs(_llm.OptimalConfig, config) : _llm.OptimalConfig;
 
         List<string> retrieved;
@@ -40,11 +42,10 @@ public sealed class AgentOrchestrator
         {
 
             var queryVec = await _embeddings.CreateEmbeddingAsync(user);
-            var candidateResults = _vec.TopK(queryVec, 10).ToList(); // Get more candidates for reranking
+            var candidateResults = _vec.TopK(queryVec, 10).ToList();
 
             retrieved = candidateResults.Select(x => x.Text).ToList();
 
-            // Apply reranking if available
             if (_reranker != null && candidateResults.Count > 1)
             {
                 var rerankedResults = new List<(float score, string text)>();
@@ -54,7 +55,6 @@ public sealed class AgentOrchestrator
                     rerankedResults.Add((score: score, text: candidate.Text));
                 }
 
-                // Sort by reranking score and take top 5
                 retrieved = rerankedResults
                     .OrderByDescending(x => x.score)
                     .Take(5)
@@ -63,7 +63,6 @@ public sealed class AgentOrchestrator
             }
             else
             {
-                // Fall back to similarity-based ranking, take top 5
                 retrieved = retrieved.Take(5).ToList();
             }
         }
@@ -93,9 +92,8 @@ public sealed class AgentOrchestrator
         }
         var response = new StringBuilder();
         var generatedTokens = new List<int>();
-        var currentSeqLength = session != null ? kv.AccumulatedSequenceLength : idsArray.Length;
         var toolState = new ToolCallState();
-        var recentTokensForStopCheck = new StringBuilder(); // Track recent text for incremental stop sequence detection
+        var recentTokensForStopCheck = new StringBuilder();
         
 
 
@@ -106,7 +104,6 @@ public sealed class AgentOrchestrator
             
 
             
-            // For logits shape [batch, seq_len, vocab], we need the last token's logits
             Span<float> logitsForSampling;
             if (logitsShape.Length == 3) // [batch, seq_len, vocab]
             {
@@ -114,23 +111,18 @@ public sealed class AgentOrchestrator
                 var seqLen = (int)logitsShape[1];
                 var vocabSize = (int)logitsShape[2];
                 
-                // FIXED: Use vocabSize consistently for calculations
-                // Take logits for the last token position: span[(seqLen-1) * vocabSize : seqLen * vocabSize]
                 var lastTokenStart = (seqLen - 1) * vocabSize;
                 logitsForSampling = span.Slice(lastTokenStart, vocabSize);
             }
             else if (logitsShape.Length == 2) // [batch, vocab] - generation step
             {
-                // For single token generation, logits are already [batch, vocab]
                 var batchSize = (int)logitsShape[0];
                 var vocabSize = (int)logitsShape[1];
                 
-                // Take logits for batch 0
                 logitsForSampling = span.Slice(0, vocabSize);
             }
             else
             {
-                // Fallback: Use last vocab_size elements if span is larger than vocab, or entire span if smaller
                 if (span.Length >= vocab)
                 {
                     logitsForSampling = span.Slice(span.Length - vocab, vocab);
@@ -147,12 +139,10 @@ public sealed class AgentOrchestrator
         
         for (int step = 0; step < config.MaxTokens; step++)
         {
-            // First step: use full prompt, subsequent steps: use only the last generated token
-            var currentInput = step == 0 ? idsArray : new long[] { generatedTokens[^1] };
+            var currentInput = step == 0 ? idsArray : [generatedTokens[^1]];
             
-            // Update sequence length for the tokens we're about to process
             var tokensToProcess = currentInput.Length;
-            var totalSeqLen = currentSeqLength + tokensToProcess;
+            var totalSeqLen = kv.CalculateTotalLengthAfterTokens(tokensToProcess);
             
             var outputs = await _llm.RunOptimizedStep(currentInput, kv, step, totalSeqLen);
             var newKv = outputs.KvCache;
@@ -164,59 +154,56 @@ public sealed class AgentOrchestrator
             
             generatedTokens.Add(nextId);
 
-            var tokenText = _tokenizer.DecodeFromIds(new[] { nextId });
+            var tokenText = _tokenizer.DecodeFromIds([nextId]);
             
-            // Stream token output to console immediately
             Console.Write(tokenText);
             
             response.Append(tokenText);
             recentTokensForStopCheck.Append(tokenText);
             
-            // Keep only recent text for stop sequence checking (last 100 chars to be safe)
             if (recentTokensForStopCheck.Length > 100)
             {
                 recentTokensForStopCheck.Remove(0, recentTokensForStopCheck.Length - 100);
             }
             
-            bool toolExecutionOccurred = false;
-            if (toolExecutor != null)
+            if (toolExecutor != null && _toolInjectionManager.IsInjectionPointSafe(step, step > 0))
             {
                 toolState.AppendToken(tokenText);
                 
                 var pendingCall = toolState.GetNextPendingCall();
                 if (pendingCall != null)
                 {
-                    var (injectedText, injectedTokens) = ExecuteToolCall(pendingCall, toolExecutor, toolState);
-                    if (!string.IsNullOrEmpty(injectedText))
+                    var injectionResult = await _toolInjectionManager.ExecuteAndInjectAsync(
+                        pendingCall, toolExecutor, toolState, _llm, 
+                        newKv, step, totalSeqLen);
+                    
+                    if (injectionResult.Success)
                     {
-                        // Stream injected text immediately as well
-                        Console.Write(injectedText);
+                        Console.Write(injectionResult.InjectedText);
                         
-                        response.Append(injectedText);
-                        generatedTokens.AddRange(injectedTokens);
+                        response.Append(injectionResult.InjectedText);
+                        generatedTokens.AddRange(injectionResult.InjectedTokens);
                         
-                        var injectArray = injectedTokens.Select(token => (long)token).ToArray();
-                        
-                        var injectSeqLen = totalSeqLen + injectArray.Length;
-                        var injectOutputs = await _llm.RunOptimizedStep(injectArray, newKv, step, injectSeqLen);
-                        currentSeqLength = injectSeqLen;
                         outputs.Dispose();
-                        outputs = injectOutputs;
-                        newKv = injectOutputs.KvCache;
-                        toolExecutionOccurred = true;
+                        newKv = injectionResult.UpdatedKvState;
+                        
+                        if (!newKv.ValidateSequenceLength(injectionResult.NewSequenceLength))
+                        {
+                            Console.WriteLine("⚠️  Sequence length inconsistency detected after tool injection");
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine($"⚠️  Tool injection failed: {injectionResult.ErrorMessage}");
+                        var errorText = $"\n[Tool execution failed: {injectionResult.ErrorMessage}]\n";
+                        Console.Write(errorText);
+                        response.Append(errorText);
                     }
                 }
             }
-            
-            // CRITICAL FIX: Update KV state AFTER all processing, BEFORE any break conditions
+
             kv = newKv;
-            // Update currentSeqLength only if no tool execution occurred (otherwise it's already updated)
-            if (!toolExecutionOccurred)
-            {
-                currentSeqLength = totalSeqLen;
-            }
             
-            // Check for stop conditions
             if (IsStopToken(nextId, config) || IsStopSequence(recentTokensForStopCheck.ToString(), config))
             {
                 outputs.Dispose();
@@ -263,7 +250,6 @@ public sealed class AgentOrchestrator
             MinP = userConfig.MinP,
             TfsZ = userConfig.TfsZ,
             TypicalP = userConfig.TypicalP,
-            // Keep optimal stop tokens and sequences (don't override these)
             StopTokenIds = optimalConfig.StopTokenIds.Concat(userConfig.StopTokenIds).ToHashSet(),
             StopSequences = optimalConfig.StopSequences.Concat(userConfig.StopSequences).ToArray()
         };
@@ -274,33 +260,6 @@ public sealed class AgentOrchestrator
     internal static bool IsStopSequence(string text, InferenceConfig config)
     {
         return config.StopSequences.Any(seq => text.Contains(seq));
-    }
-
-    private (string injectedText, int[] injectedTokens) ExecuteToolCall(ToolCall toolCall, Func<string, string> toolExecutor, ToolCallState toolState)
-    {
-        try
-        {
-            toolState.UpdateCallStatus(toolCall, ToolCallStatus.Executing);
-            
-            var result = toolExecutor.Invoke(toolCall.Arguments);
-            
-            toolState.UpdateCallStatus(toolCall, ToolCallStatus.Completed, result);
-            
-            var injectedText = $"\n<|tool_result|>\n{result}\n<|/tool_result|>\n";
-            var injectedTokens = _tokenizer.EncodeToIds(injectedText);
-            
-            return (injectedText, injectedTokens);
-        }
-        catch (Exception ex)
-        {
-            var errorMessage = $"Tool execution failed: {ex.Message}";
-            toolState.UpdateCallStatus(toolCall, ToolCallStatus.Failed, error: errorMessage);
-            
-            var injectedText = $"\n<|tool_result|>\nError: {errorMessage}\n<|/tool_result|>\n";
-            var injectedTokens = _tokenizer.EncodeToIds(injectedText);
-            
-            return (injectedText, injectedTokens);
-        }
     }
 
     internal static string BuildSystemPrompt(IReadOnlyList<string> retrieved, bool enableTools = false)
@@ -315,25 +274,6 @@ public sealed class AgentOrchestrator
 
         sb.AppendLine("You are an AI assistant specialized in answering questions based on provided context information.");
         sb.AppendLine();
-        // sb.AppendLine("## Core Instructions:");
-        // sb.AppendLine("- **ONLY respond as the assistant** - never generate or fill in user messages, questions, or responses");
-        // sb.AppendLine("- **Always format your response in markdown** with proper headings, lists, code blocks, and emphasis");
-        // sb.AppendLine("- **Base your answers primarily on the provided context** - if context doesn't contain the answer, clearly state this");
-        // sb.AppendLine("- **Cite sources explicitly** when referencing context information");
-        // sb.AppendLine("- **Accept and process markdown-formatted input** from users");
-        // sb.AppendLine();
-        // sb.AppendLine("## Response Format Requirements:");
-        // sb.AppendLine("- Use **bold** for emphasis and key points");
-        // sb.AppendLine("- Use `code formatting` for technical terms, file names, and code snippets");
-        // sb.AppendLine("- Use proper markdown headers (##, ###) to structure your response");
-        // sb.AppendLine("- Use bullet points or numbered lists when presenting multiple items");
-        // sb.AppendLine("- Include relevant code blocks with proper language specification when applicable");
-        // sb.AppendLine();
-        // sb.AppendLine("## Context Usage:");
-        // sb.AppendLine("- Analyze the provided context thoroughly before responding");
-        // sb.AppendLine("- Quote relevant portions using markdown blockquotes (>) when appropriate");
-        // sb.AppendLine("- If multiple context sources conflict, acknowledge and explain the differences");
-        // sb.AppendLine("- If context is insufficient, explicitly state what additional information would be needed");
         
         if (enableTools)
         {
@@ -379,25 +319,6 @@ public sealed class AgentOrchestrator
 
         sb.AppendLine("You are an AI assistant specialized in answering questions based on provided context information.");
         sb.AppendLine();
-        // sb.AppendLine("## Core Instructions:");
-        // sb.AppendLine("- **ONLY respond as the assistant** - never generate or fill in user messages, questions, or responses");
-        // sb.AppendLine("- **Always format your response in markdown** with proper headings, lists, code blocks, and emphasis");
-        // sb.AppendLine("- **Base your answers primarily on the provided context** - if context doesn't contain the answer, clearly state this");
-        // sb.AppendLine("- **Cite sources explicitly** when referencing context information");
-        // sb.AppendLine("- **Accept and process markdown-formatted input** from users");
-        // sb.AppendLine();
-        // sb.AppendLine("## Response Format Requirements:");
-        // sb.AppendLine("- Use **bold** for emphasis and key points");
-        // sb.AppendLine("- Use `code formatting` for technical terms, file names, and code snippets");
-        // sb.AppendLine("- Use proper markdown headers (##, ###) to structure your response");
-        // sb.AppendLine("- Use bullet points or numbered lists when presenting multiple items");
-        // sb.AppendLine("- Include relevant code blocks with proper language specification when applicable");
-        // sb.AppendLine();
-        // sb.AppendLine("## Context Usage:");
-        // sb.AppendLine("- Analyze the provided context thoroughly before responding");
-        // sb.AppendLine("- Quote relevant portions using markdown blockquotes (>) when appropriate");
-        // sb.AppendLine("- If multiple context sources conflict, acknowledge and explain the differences");
-        // sb.AppendLine("- If context is insufficient, explicitly state what additional information would be needed");
         
         if (enableTools)
         {

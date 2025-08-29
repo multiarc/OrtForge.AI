@@ -4,7 +4,7 @@ public sealed class InMemoryVectorStore
 {
     public sealed record Item(string Id, float[] Vector, string Text, IReadOnlyDictionary<string, string>? Metadata);
 
-    private readonly List<Item> _items = new();
+    private readonly List<Item> _items = [];
 
     public void Upsert(Item item)
     {

@@ -55,7 +55,6 @@ public static class ModelTypeExtensions
             ModelType.Llama3 => "llama-3", 
             ModelType.Llama3_1 => "llama-3.1",
             ModelType.Llama3_2 => "llama-3.2",
-            ModelType.Default => "default",
             _ => "default"
         };
     }

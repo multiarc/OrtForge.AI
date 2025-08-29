@@ -91,7 +91,7 @@ public class AgentOrchestratorHelpersTests
     [Fact]
     public void IsStopSequence_DetectsConfiguredSequences()
     {
-        var config = new InferenceConfig { StopSequences = new[] { "</s>", "<|end|>" } };
+        var config = new InferenceConfig { StopSequences = ["</s>", "<|end|>"] };
         Assert.True(AgentOrchestrator.IsStopSequence("hello</s>world", config));
         Assert.True(AgentOrchestrator.IsStopSequence("test<|end|>", config));
         Assert.False(AgentOrchestrator.IsStopSequence("nothing here", config));

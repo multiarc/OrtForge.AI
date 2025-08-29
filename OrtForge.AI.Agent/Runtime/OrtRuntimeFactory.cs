@@ -4,7 +4,7 @@ namespace OrtForge.AI.Agent.Runtime;
 
 public static class OrtRuntimeFactory
 {
-    private static readonly Lazy<OrtEnv> s_env = new(() => OrtEnv.Instance());
+    private static readonly Lazy<OrtEnv> s_env = new(OrtEnv.Instance);
 
     public static OrtEnv Env => s_env.Value;
 

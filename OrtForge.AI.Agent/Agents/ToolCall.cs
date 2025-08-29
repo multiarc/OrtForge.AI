@@ -20,7 +20,7 @@ public enum ToolCallStatus
 
 public sealed class ToolCallState
 {
-    private readonly List<ToolCall> _calls = new();
+    private readonly List<ToolCall> _calls = [];
     private string _currentBuffer = string.Empty;
     private bool _inToolCall = false;
     private int _toolCallStart = -1;
