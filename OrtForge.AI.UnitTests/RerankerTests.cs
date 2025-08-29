@@ -1,6 +1,9 @@
+using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
+using OrtForge.AI.Models.Astractions;
 using OrtForge.AI.Models.Models;
 using OrtForge.AI.Models.Options;
+using Xunit.Abstractions;
 
 namespace OrtForge.AI.UnitTests;
 
@@ -8,15 +11,28 @@ public class RerankerTests : IAsyncLifetime
 {
     private readonly BgeRerankerM3 _model;
     
-    public RerankerTests()
+    public RerankerTests(ITestOutputHelper outputHelper)
     {
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         _model = new BgeRerankerM3(new BgeM3Options
         {
-            TokenizerModelPath = "../../../../reranker_m3_onnx_gpu/sentencepiece.bpe.model",
-            ModelPath = "../../../../reranker_m3_onnx_gpu/model.onnx",
+            TokenizerModelPath = Path.Combine(home, "LLM/reranker_m3_onnx_gpu/sentencepiece.bpe.model"),
+            ModelPath = Path.Combine(home, "LLM/reranker_m3_onnx_gpu/model.onnx"),
             TensorElementType = TensorElementType.Float16
         });
+#if WINDOWS
+        outputHelper.WriteLine("Running on DirectML.");
+        _model.Initialize(providers: ExecutionProvider.DirectML | ExecutionProvider.CPU);
+#elif ROCM
+        outputHelper.WriteLine("Running on ROCm.");
+        _model.Initialize(providers: ExecutionProvider.ROCm | ExecutionProvider.CPU);
+#elif CUDA
+        outputHelper.WriteLine("Running on CUDA.");
+        _model.Initialize(providers: ExecutionProvider.CUDA | ExecutionProvider.CPU);
+#else
+        outputHelper.WriteLine("Running on CPU.");
         _model.Initialize();
+#endif
     }
     
     [Fact]

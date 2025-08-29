@@ -5,7 +5,6 @@ using System.Runtime.Intrinsics;
 namespace OrtForge.AI.MicroBenchmarks;
 
 [MemoryDiagnoser]
-[MaxIterationCount(16)]
 public class VectorBenchmarks
 {
     [Params(2048, 1024)]

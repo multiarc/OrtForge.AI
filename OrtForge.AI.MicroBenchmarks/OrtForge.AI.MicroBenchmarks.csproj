@@ -7,8 +7,63 @@
         <Nullable>enable</Nullable>
     </PropertyGroup>
 
+    <Choose>
+        <When Condition="$([MSBuild]::IsOSPlatform('Linux'))">
+            <PropertyGroup>
+                <DefineConstants>$(DefineConstants);LINUX</DefineConstants>
+            </PropertyGroup>
+        </When>
+        <When Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+            <ItemGroup>
+                <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.22.1" />
+            </ItemGroup>
+            <PropertyGroup>
+                <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
+            </PropertyGroup>
+        </When>
+    </Choose>
+    <Choose>
+        <When Condition="$(OrtTarget) == 'ROCM'">
+            <ItemGroup>
+                <ProjectReference Include="..\OrtForge.AI.Runtime.ROCm\OrtForge.AI.Runtime.ROCm.csproj" />
+            </ItemGroup>
+            <PropertyGroup>
+                <DefineConstants>$(DefineConstants);ROCM</DefineConstants>
+            </PropertyGroup>
+        </When>
+        <When Condition="$(OrtTarget) == 'CUDA'">
+            <ItemGroup>
+                <PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.22.1" />
+            </ItemGroup>
+            <PropertyGroup>
+                <DefineConstants>$(DefineConstants);CUDA</DefineConstants>
+            </PropertyGroup>
+        </When>
+        <Otherwise>
+            <ItemGroup>
+                <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.22.1" />
+            </ItemGroup>
+        </Otherwise>
+    </Choose>
+
     <ItemGroup>
       <PackageReference Include="BenchmarkDotNet" Version="0.15.2" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <ProjectReference Include="..\OrtForge.AI.Models\OrtForge.AI.Models.csproj" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <None Update="test_docs\data_science.txt">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+      <None Update="test_docs\ml_overview.txt">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+      <None Update="test_docs\software_dev.txt">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
     </ItemGroup>
 
 </Project>
