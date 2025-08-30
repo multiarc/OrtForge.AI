@@ -88,7 +88,7 @@ public sealed class AgentOrchestrator
             var prompt = BuildPrompt(history, user, retrieved, toolExecutor != null);
             var inputIds = _tokenizer.EncodeToIds(prompt);
             idsArray = inputIds.Select(id => (long)id).ToArray();
-            kv = new KvState();
+            kv = new KvState([]);
         }
         var response = new StringBuilder();
         var generatedTokens = new List<int>();
@@ -186,11 +186,6 @@ public sealed class AgentOrchestrator
                         
                         outputs.Dispose();
                         newKv = injectionResult.UpdatedKvState;
-                        
-                        if (!newKv.ValidateSequenceLength(injectionResult.NewSequenceLength))
-                        {
-                            Console.WriteLine("⚠️  Sequence length inconsistency detected after tool injection");
-                        }
                     }
                     else
                     {

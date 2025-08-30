@@ -43,7 +43,7 @@ public sealed class ConversationSession : IDisposable
         var systemPrompt = AgentOrchestrator.BuildSystemPrompt(retrievedContext, enableTools);
         var systemTokens = _tokenizer.EncodeToIds(systemPrompt);
         
-        _kvState = new KvState();
+        _kvState = new KvState([]);
         
 
         var inputIds = systemTokens.Select(id => (long)id).ToArray();

@@ -8,7 +8,7 @@ namespace OrtForge.AI.Agent.LLM;
 /// </summary>
 public sealed class KvState : IDisposable
 {
-    public readonly Dictionary<string, OrtValue> Tensors = new();
+    public List<LlamaSession.OutputKvTensor> Tensors { get; }
     private int _accumulatedSequenceLength;
     
     /// <summary>
@@ -26,14 +26,10 @@ public sealed class KvState : IDisposable
         }
     }
 
-    public KvState(int initialSequenceLength = 0)
+    public KvState(List<LlamaSession.OutputKvTensor> mappedOutputs, int initialSequenceLength = 0)
     {
         AccumulatedSequenceLength = initialSequenceLength;
-    }
-
-    public void AddTensor(string name, OrtValue tensor)
-    {
-        Tensors[name] = tensor;
+        Tensors = mappedOutputs;
     }
     
     /// <summary>
@@ -47,23 +43,14 @@ public sealed class KvState : IDisposable
             throw new ArgumentException("New token count cannot be negative", nameof(newTokenCount));
         return AccumulatedSequenceLength + newTokenCount;
     }
-    
-    /// <summary>
-    /// Validate that the KV state sequence length matches expected value
-    /// </summary>
-    /// <param name="expectedLength">Expected sequence length</param>
-    /// <returns>True if lengths match</returns>
-    public bool ValidateSequenceLength(int expectedLength)
-    {
-        return AccumulatedSequenceLength == expectedLength;
-    }
-    
+
     public void Dispose()
     {
-        foreach (var tensor in Tensors.Values)
+        foreach (var tensor in Tensors)
         {
-            tensor?.Dispose();
+            tensor.Tensor.Dispose();
         }
+
         Tensors.Clear();
     }
 }

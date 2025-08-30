@@ -8,45 +8,226 @@ namespace OrtForge.AI.Agent.LLM;
 public sealed class LlamaSession : IDisposable
 {
     private readonly InferenceSession _session;
-    private readonly KvMappingFormat _kvMappingFormat;
-    private readonly KvMappingValidationResult _kvMappingValidation;
+    private readonly KvTensorMappingStrategy _kvMapping;
+    private string[] _outputNames;
+    private string[] _inputNames;
+    private readonly Dictionary<string, KvTensorInfo> _kvOutputs = new();
+    private readonly Dictionary<string, KvTensorInfo> _kvInputs = new();
 
     public LlamaSession(InferenceSession session, ModelType modelType = ModelType.Default)
     {
         _session = session;
         ModelType = modelType;
+        
         OptimalConfig = LlamaOptimizations.GetOptimalConfigForModel(modelType);
         
-        _kvMappingFormat = KvTensorMappingStrategy.DetectFormat(_session.InputMetadata, _session.OutputMetadata);
-        _kvMappingValidation = KvTensorMappingStrategy.ValidateMapping(
-            _session.InputMetadata, _session.OutputMetadata, _kvMappingFormat);
-            
-        LogKvMappingValidation();
+        _kvMapping = KvTensorMappingStrategy.Create(_session.InputMetadata.Keys, _session.OutputMetadata.Keys);
+
+        DiscoverModelInputsAndOutputs();
     }
 
     public ModelType ModelType { get; }
     public InferenceConfig OptimalConfig { get; }
-    public void Dispose()
-    {
-        _session.Dispose();
-    }
     
-    private void LogKvMappingValidation()
+    public void MapInputs(StepInputs inputs, OrtValue[] modelInputs)
     {
-        Console.WriteLine($"KV Mapping Format Detected: {_kvMappingFormat}");
+        var inputShape = inputs.InputIds.GetTensorTypeAndShape().Shape;
+        var batchSize = inputShape[0];
+        var currentInputLength = inputShape[1];  // Length of current input tokens
         
-        if (!_kvMappingValidation.IsValid)
+        var totalSequenceLength = inputs.Kv.CalculateTotalLengthAfterTokens((int)currentInputLength);
+        modelInputs[0] = inputs.InputIds;
+        //modelInputs[1] = inputs.PositionIds;
+        if (inputs.AttentionMask != null)
         {
-            Console.WriteLine("⚠️  KV Mapping Validation Issues:");
-            foreach (var issue in _kvMappingValidation.Issues)
+            modelInputs[1] = inputs.AttentionMask;
+        }
+        else
+        {
+            var defaultAttentionMask = new long[totalSequenceLength];
+            Array.Fill(defaultAttentionMask, 1L);
+            var attentionMaskOrt = OrtValue.CreateTensorValueFromMemory(defaultAttentionMask, [1, totalSequenceLength]);
+            modelInputs[1] = attentionMaskOrt;
+        }
+        
+        if (inputs.Kv.Tensors.Count > 0)
+        {
+            foreach (var kv in inputs.Kv.Tensors)
             {
-                Console.WriteLine($"   - {issue}");
+                modelInputs[kv.Info.Offset] = kv.Tensor;
             }
         }
         else
         {
-            Console.WriteLine($"✅ KV Mapping Validated: {_kvMappingValidation.MappedPairs.Count} tensor pairs mapped successfully");
+            foreach (var kv in _kvInputs.Values)
+            {
+                kv.Dimensions[0] = batchSize;
+                kv.Dimensions[2] = 0L;
+                modelInputs[kv.Offset] =
+                    OrtValue.CreateAllocatedTensorValue(OrtAllocator.DefaultInstance, kv.ElementType, kv.Dimensions);
+            }
         }
+    }
+
+    public async Task<StepOutputs> RunStepAsync(StepInputs inputs, CancellationToken cancellationToken = default)
+    {
+        var inputShape = inputs.InputIds.GetTensorTypeAndShape().Shape;
+        var batchSize = inputShape[0];
+        var currentInputLength = inputShape[1];
+        
+        var inputValues = new OrtValue[_inputNames.Length];
+        var outputValues = new OrtValue[_outputNames.Length];
+
+        MapInputs(inputs, inputValues);
+        var stepOutputs = MapOutputs(inputs, outputValues, batchSize, currentInputLength);
+
+        cancellationToken.ThrowIfCancellationRequested();
+
+        try
+        {
+            using var runOptions = new RunOptions();
+            await _session.RunAsync(runOptions, _inputNames, inputValues, _outputNames, outputValues);
+        }
+        catch (Exception ex)
+        {
+            stepOutputs.Dispose();
+            throw new InvalidOperationException($"Error running the model: {ex.Message}", ex);
+        }
+
+        return stepOutputs;
+    }
+
+    private StepOutputs MapOutputs(StepInputs inputs,
+        OrtValue[] outputValues, long batchSize, long currentInputLength)
+    {
+        var logitsMeta = _session.OutputMetadata["logits"];
+        var vocabSize = logitsMeta.Dimensions[^1];
+        var logitsTensor = OrtValue.CreateAllocatedTensorValue(
+            OrtAllocator.DefaultInstance,
+            logitsMeta.ElementDataType,
+            [batchSize, currentInputLength, vocabSize]);
+        
+        var totalSequenceLength = inputs.Kv.CalculateTotalLengthAfterTokens((int)currentInputLength);
+        List<OutputKvTensor> mappedKvTensors = [];
+        var newKv = new KvState(mappedKvTensors, totalSequenceLength);
+        var outputs = new StepOutputs(logitsTensor, newKv);
+        
+        outputValues[0] = logitsTensor;
+        foreach (var output in _kvOutputs.Values)
+        {
+            var kvDims = output.Dimensions.Select(d => (long)d).ToArray();
+            kvDims[0] = batchSize;
+            if (inputs.Kv.Tensors.Count == 0)
+            {
+                kvDims[2] = currentInputLength;
+            }
+            else
+            {
+                kvDims[2] = totalSequenceLength;
+            }
+            
+            var kvTensor = OrtValue.CreateAllocatedTensorValue(
+                OrtAllocator.DefaultInstance, 
+                output.ElementType, 
+                kvDims);
+            outputValues[output.Offset] = kvTensor;
+            mappedKvTensors.Add(new OutputKvTensor
+            {
+                Tensor = kvTensor,
+                Info = _kvInputs[_kvMapping.MapOutputToInput(output.Name)]
+            });
+        }
+
+        return outputs;
+    }
+
+    private void DiscoverModelInputsAndOutputs()
+    {
+        var inputMetadata = _session.InputMetadata;
+        var outputMetadata = _session.OutputMetadata;
+        
+        if (!inputMetadata.ContainsKey("input_ids"))
+            throw new InvalidOperationException("Model has to have 'input_ids'.");
+        
+        // if (!inputMetadata.ContainsKey("position_ids"))
+        //     throw new InvalidOperationException("Model has to have 'position_ids'.");
+        
+        if (!inputMetadata.ContainsKey("attention_mask"))
+            throw new InvalidOperationException("Model has to have 'attention_mask'.");
+        
+        if (!outputMetadata.ContainsKey("logits"))
+            throw new InvalidOperationException("Model has to have 'logits' as its output.");
+        
+        var inputNames = new List<string>
+        {
+            "input_ids",
+            //"position_ids",
+            "attention_mask"
+        };
+
+        var inputOffset = 2;
+        foreach (var inputName in inputMetadata.Keys)
+        {
+            if (_kvMapping.IsKvInput(inputName))
+            {
+                var inputMeta = inputMetadata[inputName];
+                var dimensions = inputMeta.Dimensions.Select(d => (long)d).ToArray();
+                _kvInputs.Add(inputName, new KvTensorInfo
+                {
+                    Name = inputName,
+                    Dimensions = dimensions,
+                    ElementType = inputMeta.ElementDataType,
+                    Offset = inputOffset
+                });
+                inputOffset++;
+                inputNames.Add(inputName);
+            }
+        }
+        
+        _inputNames = inputNames.ToArray();
+        
+        var outputNames = new List<string> { "logits" };
+        
+        var outputOffset = 1;
+
+        foreach (var outputName in outputMetadata.Keys)
+        {
+            if (_kvMapping.IsKvOutput(outputName))
+            {
+                var outputMeta = outputMetadata[outputName];
+                var dimensions = outputMeta.Dimensions.Select(d => (long)d).ToArray();
+                _kvOutputs.Add(outputName, new KvTensorInfo
+                {
+                    Name = outputName,
+                    Dimensions = dimensions,
+                    ElementType = outputMeta.ElementDataType,
+                    Offset = outputOffset
+                });
+                outputOffset++;
+                outputNames.Add(outputName);
+            }
+        }
+        
+        _outputNames = outputNames.ToArray();
+    }
+
+    public async Task<StepOutputs> RunOptimizedStepAsync(long[] inputIds, KvState kv, int currentStep, int sequenceLength, CancellationToken cancellationToken = default)
+    {
+        //var positionIds = LlamaOptimizations.CreateOptimalPositionIds(sequenceLength, currentStep);
+        var attentionMask = LlamaOptimizations.CreateOptimalAttentionMask(sequenceLength);
+        
+        using var inputs = StepInputs.Create(inputIds, kv, null, attentionMask);
+        return await RunStepAsync(inputs, cancellationToken);
+    }
+
+    public async Task<StepOutputs> RunOptimizedStep(long[] inputIds, KvState kv, int currentStep, int sequenceLength)
+    {
+        return await RunOptimizedStepAsync(inputIds, kv, currentStep, sequenceLength, CancellationToken.None);
+    }
+    
+    public void Dispose()
+    {
+        _session.Dispose();
     }
     
     private static TensorElementType GetTensorElementType(Type type)
@@ -61,7 +242,7 @@ public sealed class LlamaSession : IDisposable
         if (type == typeof(long)) return TensorElementType.Int64;
         return TensorElementType.Float;
     }
-
+    
     public sealed record StepInputs(
         OrtValue InputIds,
         KvState Kv,
@@ -173,262 +354,17 @@ public sealed class LlamaSession : IDisposable
         }
     }
 
-    public async Task<StepOutputs> RunStepAsync(StepInputs inputs, CancellationToken cancellationToken = default)
+    public sealed class OutputKvTensor
     {
-        var inputMetadataKeys = _session.InputMetadata.Keys;
-        var outputMetadata = _session.OutputMetadata;
-        
-        var inputShape = inputs.InputIds.GetTensorTypeAndShape().Shape;
-        var batchSize = inputShape[0];
-        var currentInputLength = inputShape[1];  // Length of current input tokens
-        
-        var totalSequenceLength = inputs.Kv.CalculateTotalLengthAfterTokens((int)currentInputLength);
-        
-
-        
-        var inputValues = new List<OrtValue>();
-        var inputNamesList = new List<string>();
-        var outputCount = outputMetadata.Count;
-        var outputNames = new List<string>(outputCount);
-        var outputValues = new List<OrtValue>(outputCount);
-
-        bool hasInputIds = false;
-        foreach (var key in inputMetadataKeys)
-        {
-            if (key == "input_ids")
-            {
-                hasInputIds = true;
-                break;
-            }
-        }
-        
-        if (!hasInputIds)
-            throw new InvalidOperationException("Model expects 'input_ids'.");
-            
-        inputValues.Add(inputs.InputIds);
-        inputNamesList.Add("input_ids");
-
-        bool hasPositionIds = false;
-        if (inputs.PositionIds != null)
-        {
-            foreach (var key in inputMetadataKeys)
-            {
-                if (key == "position_ids")
-                {
-                    hasPositionIds = true;
-                    break;
-                }
-            }
-        }
-
-        if (hasPositionIds && inputs.PositionIds != null)
-        {
-            inputValues.Add(inputs.PositionIds);
-            inputNamesList.Add("position_ids");
-        }
-
-        if (inputMetadataKeys.Contains("attention_mask"))
-        {
-            if (inputs.AttentionMask != null)
-            {
-                inputValues.Add(inputs.AttentionMask);
-            }
-            else
-            {
-                var defaultAttentionMask = new long[totalSequenceLength];
-                Array.Fill(defaultAttentionMask, 1L);
-                var attentionMaskOrt = OrtValue.CreateTensorValueFromMemory(defaultAttentionMask, [1, totalSequenceLength]);
-                inputValues.Add(attentionMaskOrt);
-            }
-            inputNamesList.Add("attention_mask");
-        }
-
-        var providedKvInputs = new HashSet<string>();
-        
-        if (inputs.Kv.Tensors.Count > 0)
-        {
-            foreach (var kv in inputs.Kv.Tensors)
-            {
-                string? targetName = null;
-                
-                foreach (var inputName in inputMetadataKeys)
-                {
-                    if (inputName == kv.Key)
-                    {
-                        targetName = kv.Key;
-                        break;
-                    }
-                }
-                
-                if (targetName == null)
-                {
-                    targetName = KvTensorMappingStrategy.MapOutputToInput(
-                        kv.Key, _kvMappingFormat, inputMetadataKeys.ToList());
-                    
-                    if (targetName != null)
-                    {
-                        Console.WriteLine($"🔗 Mapped KV tensor: {kv.Key} → {targetName}");
-                    }
-                    else
-                    {
-                        Console.WriteLine($"❌ Failed to map KV tensor: {kv.Key}");
-                    }
-                }
-                
-                if (targetName == null) continue;
-
-
-                
-                inputValues.Add(kv.Value);
-                inputNamesList.Add(targetName);
-                providedKvInputs.Add(targetName);
-            }
-        }
-        
-        foreach (var inputName in inputMetadataKeys)
-        {
-            if ((inputName.Contains("past") || inputName.Contains("key") || inputName.Contains("value")) && 
-                !providedKvInputs.Contains(inputName) &&
-                inputName != "input_ids" && inputName != "position_ids" && inputName != "attention_mask")
-            {
-
-                var inputMeta = _session.InputMetadata[inputName];
-                var kvDims = inputMeta.Dimensions.ToArray();
-                
-                for (int i = 0; i < kvDims.Length; i++)
-                {
-                    if (kvDims[i] < 0)
-                    {
-                        if (i == 0) 
-                            kvDims[i] = (int)batchSize;
-                        else if (i == 2) 
-                            kvDims[i] = 0;
-                    }
-                }
-                
-                var longDims = kvDims.Select(d => (long)d).ToArray();
-                var emptyKvTensor = OrtValue.CreateAllocatedTensorValue(
-                    OrtAllocator.DefaultInstance, 
-                    GetTensorElementType(inputMeta.ElementType), 
-                    longDims);
-                
-                inputValues.Add(emptyKvTensor);
-                inputNamesList.Add(inputName);
-            }
-        }
-        
-        foreach (var output in outputMetadata)
-        {
-            outputNames.Add(output.Key);
-            
-            if (output.Key.ToLower().Contains("logits"))
-            {
-                var vocabSize = output.Value.Dimensions[^1];
-                
-                var tensorElementType = GetTensorElementType(output.Value.ElementType);
-                
-                var logitsTensor = OrtValue.CreateAllocatedTensorValue(
-                    OrtAllocator.DefaultInstance, 
-                    tensorElementType, 
-                    [batchSize, currentInputLength, vocabSize]);
-                outputValues.Add(logitsTensor);
-            }
-            else
-            {
-                var kvDims = output.Value.Dimensions.ToArray();
-                for (int i = 0; i < kvDims.Length; i++)
-                {
-                    if (kvDims[i] < 0)
-                    {
-                        if (i == 0) kvDims[i] = (int)batchSize;
-                        else if (i == 2) 
-                        {
-                            if (inputs.Kv.Tensors.Count == 0)
-                            {
-                                kvDims[i] = (int)currentInputLength;
-
-                            }
-                            else
-                            {
-                                kvDims[i] = (int)totalSequenceLength;
-                            }
-                        }
-                    }
-                }
-                var longDims = kvDims.Select(d => (long)d).ToArray();
-                
-
-                
-                var kvTensor = OrtValue.CreateAllocatedTensorValue(
-                    OrtAllocator.DefaultInstance, 
-                    GetTensorElementType(output.Value.ElementType), 
-                    longDims);
-                outputValues.Add(kvTensor);
-            }
-        }
-
-        var inputNamesArray = inputNamesList.ToArray();
-        var inputValuesArray = inputValues.ToArray();
-        var outputNamesArray = outputNames.ToArray();
-        var outputValuesArray = outputValues.ToArray();
-
-        cancellationToken.ThrowIfCancellationRequested();
-
-        try
-        {
-            using var runOptions = new RunOptions();
-            await _session.RunAsync(runOptions, inputNamesArray, inputValuesArray, outputNamesArray, outputValuesArray);
-        }
-        catch (Exception ex)
-        {
-            throw new InvalidOperationException($"Error running the model: {ex.Message}", ex);
-        }
-
-        var newKv = new KvState((int)totalSequenceLength);
-
-        OrtValue? logits = null;
-        
-        for (int i = 0; i < outputNamesArray.Length; i++)
-        {
-            var outputName = outputNamesArray[i];
-            var outputTensor = outputValuesArray[i];
-            
-            if (outputName.ToLower().Contains("logits"))
-            {
-                logits = outputTensor;
-            }
-            else
-            {
-                newKv.AddTensor(outputName, outputTensor);
-                var availableInputNames = _session.InputMetadata.Keys.Where(name => 
-                    name.Contains("past") || name.Contains("key") || name.Contains("value")).ToList();
-                var alias = KvTensorMappingStrategy.MapInputToOutput(outputName, _kvMappingFormat, availableInputNames);
-                
-                if (alias != null)
-                {
-                    newKv.AddTensor(alias, outputTensor);
-                    Console.WriteLine($"🔗 Created KV alias: {outputName} → {alias}");
-                }
-            }
-        }
-
-        if (logits is null)
-            throw new InvalidOperationException("Model did not return logits.");
-
-        return new StepOutputs(logits, newKv);
+        public KvTensorInfo Info { get; init; }
+        public OrtValue Tensor { get; set; }
     }
 
-    public async Task<StepOutputs> RunOptimizedStepAsync(long[] inputIds, KvState kv, int currentStep, int sequenceLength, CancellationToken cancellationToken = default)
+    public sealed class KvTensorInfo
     {
-        var positionIds = LlamaOptimizations.CreateOptimalPositionIds(sequenceLength, currentStep);
-        var attentionMask = LlamaOptimizations.CreateOptimalAttentionMask(sequenceLength);
-        
-        using var inputs = StepInputs.Create(inputIds, kv, positionIds, attentionMask);
-        return await RunStepAsync(inputs, cancellationToken);
-    }
-
-    public async Task<StepOutputs> RunOptimizedStep(long[] inputIds, KvState kv, int currentStep, int sequenceLength)
-    {
-        return await RunOptimizedStepAsync(inputIds, kv, currentStep, sequenceLength, CancellationToken.None);
+        public string Name { get; init; }
+        public TensorElementType ElementType { get; init; }
+        public long[] Dimensions { get; init; }
+        public int Offset { get; init; }
     }
 }

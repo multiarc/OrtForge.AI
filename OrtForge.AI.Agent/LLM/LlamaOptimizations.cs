@@ -38,7 +38,7 @@ public static class LlamaOptimizations
         };
     }
 
-    public static long[]? CreateOptimalPositionIds(int sequenceLength, int currentStep)
+    public static long[] CreateOptimalPositionIds(int sequenceLength, int currentStep)
     {
         if (currentStep == 0)
         {
