@@ -1,16 +1,9 @@
-using Microsoft.ML.OnnxRuntime;
-using Microsoft.ML.OnnxRuntime.Tensors;
 using OrtForge.AI.Agent.Agents;
-using OrtForge.AI.Agent.Generation;
 using OrtForge.AI.Agent.LLM;
-using OrtForge.AI.Agent.Rag;
 using OrtForge.AI.Agent.Runtime;
 using OrtForge.AI.Agent.Tokenization;
-using OrtForge.AI.Models.Astractions;
-using OrtForge.AI.Models.Models;
-using OrtForge.AI.Models.Options;
 
-namespace OrtForge.AI.Agent.Console;
+namespace OrtForge.AI.Agent.TestApp;
 
 internal static class Program
 {
@@ -18,7 +11,7 @@ internal static class Program
     {
         if (args.Length < 4)
         {
-            System.Console.WriteLine("Usage: OrtAgent.Console <llm.onnx> <tokenizer.json|sentencepiece.bpe.model> <embedding.onnx> <embedding_tokenizer.model> [reranker.onnx] [reranker_tokenizer.model]");
+            Console.WriteLine("Usage: OrtAgent.Console <llm.onnx> <tokenizer.json|sentencepiece.bpe.model> <embedding.onnx> <embedding_tokenizer.model> [reranker.onnx] [reranker_tokenizer.model]");
             return;
         }
 
@@ -29,8 +22,8 @@ internal static class Program
         // var rerankerPath = args.Length > 4 ? args[4].Trim() : null;
         // var rerankerTokenizerPath = args.Length > 5 ? args[5].Trim() : null;
         
-        System.Console.WriteLine($"LLM: {llmPath}");
-        System.Console.WriteLine($"Tokenizer: {tokenizerPath}");
+        Console.WriteLine($"LLM: {llmPath}");
+        Console.WriteLine($"Tokenizer: {tokenizerPath}");
         // System.Console.WriteLine($"Embedding: {embPath}");
         // System.Console.WriteLine($"Embedding Tokenizer: {embTokenizerPath}");
         // System.Console.WriteLine($"Reranker: {rerankerPath}");
@@ -39,7 +32,7 @@ internal static class Program
         using var llmSession = OrtRuntimeFactory.CreateSession(llmPath);
         // Auto-detect model type from path, or specify explicitly
         var modelType = ModelTypeExtensions.ParseFromString(llmPath);
-        System.Console.WriteLine($"Detected model type: {modelType}");
+        Console.WriteLine($"Detected model type: {modelType}");
         using var llama = new LlamaSession(llmSession, modelType);
         
         // // Initialize embedding model with BgeM3Model
@@ -68,41 +61,52 @@ internal static class Program
 
         var tok = TokenizerService.FromHuggingFace(tokenizerPath);
         //var vec = new InMemoryVectorStore();
-        var agent = new AgentOrchestrator(llama, tok/*, embeddingModel, vec, rerankerModel*/);
+        var agent = new AgentOrchestrator(/*, embeddingModel, vec, rerankerModel*/);
         
-        using var session = new ConversationSession(tok);
+        using var session = new ConversationSession(llama, tok, llama.OptimalConfig);
         
-        System.Console.WriteLine("🤖 OrtForge.AI Chat");
-        System.Console.WriteLine("💬 Enter your message (empty line to quit):");
-        System.Console.WriteLine();
+        Console.WriteLine("🤖 OrtForge.AI Chat");
+        Console.WriteLine("💬 Enter your message (empty line to quit):");
+        Console.WriteLine();
         
         while (true)
         {
-            System.Console.Write("🧑 > ");
-            var user = System.Console.ReadLine();
+            Console.Write("🧑 > ");
+            var user = Console.ReadLine();
             if (string.IsNullOrWhiteSpace(user)) 
             {
-                System.Console.WriteLine("👋 Goodbye!");
+                Console.WriteLine("👋 Goodbye!");
                 break;
             }
             
-            System.Console.WriteLine();
-            System.Console.Write("🤖 Assistant: ");
+            Console.WriteLine();
+            Console.Write("🤖 Assistant: ");
             
             try
             {
-                var answer = await agent.ChatTurnAsync(user!, new List<(string, string)>(), null, null, session);
+                await foreach (var token in agent.ChatTurnAsync(session, user!))
+                {
+                    Console.Write(token);
+                }
+
+                
             }
             catch (Exception ex)
             {
-                System.Console.WriteLine();
-                System.Console.WriteLine($"❌ Error: {ex.Message}");
-                System.Console.WriteLine($"❌ Stack trace: {ex.StackTrace}");
+                Console.WriteLine();
+                Console.WriteLine($"❌ Error: {ex.Message}");
+                Console.WriteLine($"❌ Stack trace: {ex.StackTrace}");
             }
             
-            System.Console.WriteLine();
+            Console.WriteLine();
         }
         
+        Console.WriteLine("===============CHAT HISTORY================");
+        Console.WriteLine(session.EntireConversation.ToString());
+        Console.WriteLine("===========================================");
+        Console.WriteLine("Press any key to exit...");
+        Console.ReadKey();
+
         // Dispose models
         //embeddingModel.Dispose();
         //rerankerModel?.Dispose();

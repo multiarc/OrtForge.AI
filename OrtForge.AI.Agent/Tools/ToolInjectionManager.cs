@@ -43,7 +43,6 @@ public sealed class ToolInjectionManager
         ToolCallState toolState,
         LlamaSession llamaSession,
         KvState currentKvState,
-        int currentStep,
         int currentSequenceLength)
     {
         try
@@ -79,8 +78,8 @@ public sealed class ToolInjectionManager
             var kvStateSnapshot = CreateKvStateSnapshot(currentKvState);
             
             var injectArray = injectedTokens.Select(token => (long)token).ToArray();
-            var injectOutputs = await llamaSession.RunOptimizedStep(
-                injectArray, currentKvState, currentStep, newSequenceLength);
+            var injectOutputs = await llamaSession.RunOptimizedStepAsync(
+                injectArray, currentKvState, newSequenceLength);
             
             var updatedKvState = injectOutputs.KvCache;
             var postValidation = ValidateKvState(updatedKvState, newSequenceLength);

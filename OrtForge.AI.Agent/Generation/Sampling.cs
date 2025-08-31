@@ -2,7 +2,7 @@ namespace OrtForge.AI.Agent.Generation;
 
 public static class Sampling
 {
-    public static int Sample(ReadOnlySpan<float> logits, InferenceConfig config, ReadOnlySpan<int> previousTokens = default, Random? rng = null)
+    public static int Sample(ReadOnlySpan<float> logits, InferenceConfig config, List<int> previousTokens = default, Random? rng = null)
     {
         rng ??= config.Seed.HasValue ? new Random(config.Seed.Value) : Random.Shared;
 
@@ -13,17 +13,17 @@ public static class Sampling
 
         var logitsArray = logits.ToArray();
         
-        if (config.RepetitionPenalty != 1.0 && !previousTokens.IsEmpty)
+        if (config.RepetitionPenalty > 0 && previousTokens.Count > 0)
         {
             ApplyRepetitionPenalty(logitsArray, previousTokens, config.RepetitionPenalty);
         }
         
-        if (config.FrequencyPenalty != 0.0 && !previousTokens.IsEmpty)
+        if (config.FrequencyPenalty > 0.0 && previousTokens.Count > 0)
         {
             ApplyFrequencyPenalty(logitsArray, previousTokens, config.FrequencyPenalty);
         }
         
-        if (config.PresencePenalty != 0.0 && !previousTokens.IsEmpty)
+        if (config.PresencePenalty > 0.0 && previousTokens.Count > 0)
         {
             ApplyPresencePenalty(logitsArray, previousTokens, config.PresencePenalty);
         }
@@ -90,9 +90,10 @@ public static class Sampling
         return probs;
     }
 
-    private static void ApplyRepetitionPenalty(float[] logits, ReadOnlySpan<int> previousTokens, double penalty)
+    private static void ApplyRepetitionPenalty(float[] logits, List<int> previousTokens, double penalty)
     {
-        if (penalty == 1.0) return;
+        if (penalty <= 0)
+            return;
         
         var tokenCounts = new Dictionary<int, int>();
         foreach (var token in previousTokens)
@@ -117,9 +118,10 @@ public static class Sampling
         }
     }
 
-    private static void ApplyFrequencyPenalty(float[] logits, ReadOnlySpan<int> previousTokens, double penalty)
+    private static void ApplyFrequencyPenalty(float[] logits, List<int> previousTokens, double penalty)
     {
-        if (penalty == 0.0) return;
+        if (penalty <= 0)
+            return;
         
         var tokenCounts = new Dictionary<int, int>();
         foreach (var token in previousTokens)
@@ -136,9 +138,10 @@ public static class Sampling
         }
     }
 
-    private static void ApplyPresencePenalty(float[] logits, ReadOnlySpan<int> previousTokens, double penalty)
+    private static void ApplyPresencePenalty(float[] logits, List<int> previousTokens, double penalty)
     {
-        if (penalty == 0.0) return;
+        if (penalty <= 0)
+            return;
         
         var presentTokens = new HashSet<int>();
         foreach (var token in previousTokens)

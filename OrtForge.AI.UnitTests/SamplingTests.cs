@@ -18,7 +18,7 @@ public class SamplingTests
         var logits = new float[] { 0.1f, 2.5f, -0.5f, 1.0f };
         var greedy = Sampling.Greedy(logits);
         var config = InferenceConfig.Greedy;
-        var idx = Sampling.Sample(logits, config, ReadOnlySpan<int>.Empty, new Random(42));
+        var idx = Sampling.Sample(logits, config, [], new Random(42));
         Assert.Equal(greedy, idx);
     }
 
@@ -30,7 +30,7 @@ public class SamplingTests
         var rng = new Random(123);
         for (int t = 0; t < 100; t++)
         {
-            var idx = Sampling.Sample(logits, config, ReadOnlySpan<int>.Empty, rng);
+            var idx = Sampling.Sample(logits, config, [], rng);
             Assert.Contains(idx, new[] { 2, 3, 4 });
         }
     }
@@ -44,7 +44,7 @@ public class SamplingTests
         var rng = new Random(7);
         for (int t = 0; t < 50; t++)
         {
-            var idx = Sampling.Sample(logits, config, ReadOnlySpan<int>.Empty, rng);
+            var idx = Sampling.Sample(logits, config, [], rng);
             if (idx == 4) favored++;
         }
         Assert.True(favored > 40);
@@ -57,7 +57,7 @@ public class SamplingTests
         var previousTokens = new int[] { 4, 4, 4 };
         var config = new InferenceConfig { RepetitionPenalty = 1.2, TopK = 5, Temperature = 0.1, Seed = 42 };
         
-        var idx = Sampling.Sample(logits, config, previousTokens.AsSpan(), new Random(42));
+        var idx = Sampling.Sample(logits, config, [], new Random(42));
         
         Assert.NotEqual(4, idx);
     }
@@ -71,7 +71,7 @@ public class SamplingTests
         
         for (int t = 0; t < 50; t++)
         {
-            var idx = Sampling.Sample(logits, config, ReadOnlySpan<int>.Empty, rng);
+            var idx = Sampling.Sample(logits, config, [], rng);
             Assert.Contains(idx, new[] { 3, 4 });
         }
     }

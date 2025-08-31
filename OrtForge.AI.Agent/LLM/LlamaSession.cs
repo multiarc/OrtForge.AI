@@ -211,18 +211,13 @@ public sealed class LlamaSession : IDisposable
         _outputNames = outputNames.ToArray();
     }
 
-    public async Task<StepOutputs> RunOptimizedStepAsync(long[] inputIds, KvState kv, int currentStep, int sequenceLength, CancellationToken cancellationToken = default)
+    public async Task<StepOutputs> RunOptimizedStepAsync(long[] inputIds, KvState kv, int sequenceLength, CancellationToken cancellationToken = default)
     {
         //var positionIds = LlamaOptimizations.CreateOptimalPositionIds(sequenceLength, currentStep);
         var attentionMask = LlamaOptimizations.CreateOptimalAttentionMask(sequenceLength);
         
         using var inputs = StepInputs.Create(inputIds, kv, null, attentionMask);
         return await RunStepAsync(inputs, cancellationToken);
-    }
-
-    public async Task<StepOutputs> RunOptimizedStep(long[] inputIds, KvState kv, int currentStep, int sequenceLength)
-    {
-        return await RunOptimizedStepAsync(inputIds, kv, currentStep, sequenceLength, CancellationToken.None);
     }
     
     public void Dispose()

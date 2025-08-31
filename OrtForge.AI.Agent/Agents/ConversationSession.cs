@@ -1,4 +1,6 @@
+using System.Runtime.CompilerServices;
 using System.Text;
+using Microsoft.ML.Tokenizers;
 using OrtForge.AI.Agent.Generation;
 using OrtForge.AI.Agent.LLM;
 using OrtForge.AI.Agent.Tokenization;
@@ -8,162 +10,96 @@ namespace OrtForge.AI.Agent.Agents;
 public sealed class ConversationSession : IDisposable
 {
     private readonly TokenizerService _tokenizer;
-    private readonly List<(string role, string content)> _history = [];
-    private KvState? _kvState;
+    private readonly LlamaSession _llm;
+    private readonly InferenceConfig _inferenceConfig;
+    private KvState _kvState;
+    private bool _isSystemPromptProcessed;
+    public StringBuilder EntireConversation { get; } = new();
 
-    private bool _isSystemPromptProcessed = false;
-    
-    public string SessionId { get; } = Guid.NewGuid().ToString("N")[..8];
-    public IReadOnlyList<(string role, string content)> History => _history;
-    public int TotalTokensProcessed => _kvState?.AccumulatedSequenceLength ?? 0;
-    public bool IsInitialized => _isSystemPromptProcessed;
-    
-
-    public int MaxHistoryLength { get; set; } = 20;
-    public int MaxTokensBeforeTruncation { get; set; } = 2048;
-    public bool EnableSummarization { get; set; } = true;
-
-    public ConversationSession(TokenizerService tokenizer)
+    public ConversationSession(LlamaSession llm, TokenizerService tokenizer, InferenceConfig inferenceConfig)
     {
+        _llm = llm;
+        _inferenceConfig = inferenceConfig;
         _tokenizer = tokenizer;
-    }
-
-
-    public async Task<KvState> InitializeSystemPromptAsync(
-        LlamaSession llmSession, 
-        IReadOnlyList<string> retrievedContext, 
-        bool enableTools = false)
-    {
-        if (_isSystemPromptProcessed)
-        {
-            return _kvState ?? throw new InvalidOperationException("System prompt processed but KV state is null");
-        }
-
-
-        var systemPrompt = AgentOrchestrator.BuildSystemPrompt(retrievedContext, enableTools);
-        var systemTokens = _tokenizer.EncodeToIds(systemPrompt);
-        
         _kvState = new KvState([]);
-        
-
-        var inputIds = systemTokens.Select(id => (long)id).ToArray();
-        
-        var outputs = await llmSession.RunOptimizedStep(inputIds, _kvState, 0, inputIds.Length);
-        
-
-        _kvState = outputs.KvCache;
-        _isSystemPromptProcessed = true;
-        
-        outputs.Dispose();
-        return _kvState;
     }
 
-
-    public async Task<(int[] newTokens, KvState kvState)> AddMessageAsync(
-        string role, 
-        string content,
-        LlamaSession? llmSession = null)
-    {
-
-        await TruncateIfNeededAsync(llmSession);
-        
-
-        _history.Add((role, content));
-        
-
-        var messagePrompt = FormatMessage(role, content);
-        var messageTokens = _tokenizer.EncodeToIds(messagePrompt);
-        
-        if (_kvState == null)
-        {
-            throw new InvalidOperationException("Session not initialized. Call InitializeSystemPromptAsync first.");
-        }
-        
-
-        if (llmSession != null)
-        {
-            var inputIds = messageTokens.Select(id => (long)id).ToArray();
-            // Use centralized sequence length calculation from KvState
-            var totalSeqLength = _kvState.CalculateTotalLengthAfterTokens(inputIds.Length);
-            
-            var outputs = await llmSession.RunOptimizedStep(inputIds, _kvState, 0, totalSeqLength);
-            _kvState = outputs.KvCache;
-            outputs.Dispose();
-        }
-        
-        return (messageTokens, _kvState);
-    }
-
-
-    public KvState GetCurrentKvState()
-    {
-        return _kvState ?? throw new InvalidOperationException("Session not initialized");
-    }
-
-    public void UpdateKvState(KvState newKvState)
-    {
-        _kvState = newKvState;
-    }
-
-    public void AddToHistory(string role, string content)
-    {
-        _history.Add((role, content));
-    }
-
-
-
-
-    private async Task TruncateIfNeededAsync(LlamaSession? llmSession)
-    {
-        if (_history.Count <= MaxHistoryLength && 
-            TotalTokensProcessed <= MaxTokensBeforeTruncation)
-        {
-            return;
-        }
-
-        if (EnableSummarization && llmSession != null)
-        {
-            await SummarizeAndTruncateAsync(llmSession);
-        }
-        else
-        {
-            SimpleTruncate();
-        }
-    }
-
-
-    private void SimpleTruncate()
-    {
-        var messagesToKeep = MaxHistoryLength / 2;
-        if (_history.Count > messagesToKeep)
-        {
-            _history.RemoveRange(0, _history.Count - messagesToKeep);
-            
-
-            _kvState?.Dispose();
-            _kvState = null;
-            _isSystemPromptProcessed = false;
-        }
-    }
-
-
-    private Task SummarizeAndTruncateAsync(LlamaSession llmSession)
-    {
-        SimpleTruncate();
-        return Task.CompletedTask;
-    }
-
-
-    private static string FormatMessage(string role, string content)
-    {
-        return $"<|start_header_id|>{role}<|end_header_id|>\n\n{content}\n<|eot_id|>";
-    }
-
-
-
+    public string SessionId { get; } = Guid.NewGuid().ToString("N")[..8];
+    public bool IsInitialized => _isSystemPromptProcessed;
 
     public void Dispose()
     {
-        _kvState?.Dispose();
+        _kvState.Dispose();
+    }
+
+    public async IAsyncEnumerable<string> GenerateNextResponseAsync(string prompt,
+        Func<string, string>? toolExecutor = null,
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+    {
+        EntireConversation.Append(prompt);
+        var generatedTokens = new List<int>();
+        var toolState = new ToolCallState();
+        var inputIds = _tokenizer.EncodeToIds(prompt).Select(x => (long)x).ToArray();
+
+        for (int token = 0; token < _inferenceConfig.MaxTokens; token++)
+        {
+            using var outputs =
+                await _llm.RunOptimizedStepAsync(inputIds, _kvState, _kvState.AccumulatedSequenceLength + inputIds.Length,
+                    cancellationToken);
+            _kvState = outputs.KvCache;
+            var nextToken = GetNextTokenSample(outputs, generatedTokens);
+            var tokenText = _tokenizer.DecodeFromIds([nextToken]);
+            EntireConversation.Append(tokenText);
+            
+            if (IsStopToken(nextToken))
+            {
+                yield break;
+            }
+            
+            generatedTokens.Add(nextToken);
+            
+            //inject current token into next inference step
+            inputIds = [nextToken];
+
+            if (toolExecutor != null)
+            {
+                toolState.AppendToken(tokenText);
+                var pendingCall = toolState.GetNextPendingCall();
+                if (pendingCall != null)
+                {
+                    //TODO
+                }
+            }
+
+            yield return tokenText;
+        }
+    }
+    
+    private bool IsStopToken(int tokenId) => _inferenceConfig.StopTokenIds.Contains(tokenId);
+    private int GetNextTokenSample(LlamaSession.StepOutputs outputs, List<int> previousTurnTokens)
+    {
+        var span = outputs.GetLogitsSpan();
+        var logitsShape = outputs.Logits.GetTensorTypeAndShape().Shape;
+        Span<float> logitsForSampling;
+        if (logitsShape.Length == 3) // [batch, seq_len, vocab]
+        {
+            var seqLen = (int)logitsShape[1];
+            var vocabSize = (int)logitsShape[2];
+                
+            var lastTokenStart = (seqLen - 1) * vocabSize;
+            logitsForSampling = span.Slice(lastTokenStart, vocabSize);
+        }
+        else if (logitsShape.Length == 2) // [batch, vocab] - generation step
+        {
+            var vocabSize = (int)logitsShape[1];
+                
+            logitsForSampling = span.Slice(0, vocabSize);
+        }
+        else
+        {
+            throw new InvalidOperationException("Unexpected logits shape.");
+        }
+            
+        return Sampling.Sample(logitsForSampling, _inferenceConfig, previousTurnTokens);
     }
 }
