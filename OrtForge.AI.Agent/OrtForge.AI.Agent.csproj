@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.22.1" />
+    <PackageReference Include="Microsoft.ML.Tokenizers" Version="2.0.0-preview.25373.1" />
+    <PackageReference Include="Tokenizers.DotNet" Version="1.2.1" />
+    <PackageReference Include="Tokenizers.DotNet.runtime.linux-x64" Version="1.2.1" />
+    <PackageReference Include="Tokenizers.DotNet.runtime.win-x64" Version="1.2.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../OrtForge.AI.Models/OrtForge.AI.Models.csproj" />
+  </ItemGroup>
+</Project>
+
+

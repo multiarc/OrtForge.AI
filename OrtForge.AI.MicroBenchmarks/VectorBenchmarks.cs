@@ -42,7 +42,7 @@ public class VectorBenchmarks
             iterations--;
         }
 
-        var magnitude = (float) Math.Sqrt(System.Numerics.Vector.Sum(buffer));
+        var magnitude = (float) Math.Sqrt(Vector.Sum(buffer));
         return magnitude;
     }
     
