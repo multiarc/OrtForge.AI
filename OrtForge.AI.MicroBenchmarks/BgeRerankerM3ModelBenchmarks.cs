@@ -22,8 +22,8 @@ public class BgeRerankerM3ModelBenchmarks
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         _model = new BgeRerankerM3(new BgeM3Options
         {
-            TokenizerModelPath = Path.Combine(home, "LLM/reranker_m3_onnx_gpu/sentencepiece.bpe.model"),
-            ModelPath = Path.Combine(home, "LLM/reranker_m3_onnx_gpu/model.onnx"),
+            TokenizerModelPath = Path.Combine(home, "LLM/BGE-RERANKER-M3-ONNX/sentencepiece.bpe.model"),
+            ModelPath = Path.Combine(home, "LLM/BGE-RERANKER-M3-ONNX/model.onnx"),
             TensorElementType = TensorElementType.Float16
         });
         _model.Initialize(Mode, optimizationLevel: OptimizationLevel, providers: Providers);
@@ -50,6 +50,8 @@ public class BgeRerankerM3ModelBenchmarks
         , ExecutionProvider.CUDA, ExecutionProvider.CUDA | ExecutionProvider.CPU
 #endif
     )]
+#elif OSX
+    [Params(ExecutionProvider.CPU, ExecutionProvider.CoreML | ExecutionProvider.CPU)]
 #endif
     public ExecutionProvider Providers { get; set; }
 

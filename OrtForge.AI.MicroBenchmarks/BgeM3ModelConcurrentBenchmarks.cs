@@ -1,5 +1,5 @@
 #if !WINDOWS //Windows does not support running DirectML in parallel, CPU tests are worthless for this case
-#if ROCM || CUDA
+#if OSX || ROCM || CUDA
 using BenchmarkDotNet.Attributes;
 using BenchmarkDotNet.Engines;
 using Microsoft.ML.OnnxRuntime;
@@ -24,8 +24,8 @@ public class BgeM3ModelConcurrentBenchmarks
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         _model = new BgeM3Model(new BgeM3Options
         {
-            TokenizerModelPath = Path.Combine(home, "LLM/bge_m3_onnx_gpu/sentencepiece.bpe.model"), 
-            ModelPath = Path.Combine(home, "LLM/bge_m3_onnx_gpu/model.onnx"),
+            TokenizerModelPath = Path.Combine(home, "LLM/BGE-M3-ONNX/sentencepiece.bpe.model"), 
+            ModelPath = Path.Combine(home, "LLM/BGE-M3-ONNX/model.onnx"),
             TensorElementType = TensorElementType.Float16
         });
         _model.Initialize(Mode, optimizationLevel: OptimizationLevel, providers: Providers);
@@ -39,6 +39,8 @@ public class BgeM3ModelConcurrentBenchmarks
     [Params(ExecutionProvider.ROCm | ExecutionProvider.CPU)]
 #elif CUDA
     [Params(ExecutionProvider.CUDA | ExecutionProvider.CPU)]
+#elif OSX
+    [Params(ExecutionProvider.CoreML | ExecutionProvider.CPU)]
 #endif
     public ExecutionProvider Providers { get; set; }
 
