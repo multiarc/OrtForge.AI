@@ -16,8 +16,8 @@ public class RerankerTests : IAsyncLifetime
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         _model = new BgeRerankerM3(new BgeM3Options
         {
-            TokenizerModelPath = Path.Combine(home, "LLM/reranker_m3_onnx_gpu/sentencepiece.bpe.model"),
-            ModelPath = Path.Combine(home, "LLM/reranker_m3_onnx_gpu/model.onnx"),
+            TokenizerModelPath = Path.Combine(home, "LLM/BGE-RERANKER-M3-ONNX/sentencepiece.bpe.model"),
+            ModelPath = Path.Combine(home, "LLM/BGE-RERANKER-M3-ONNX/model.onnx"),
             TensorElementType = TensorElementType.Float16
         });
 #if WINDOWS
@@ -29,6 +29,9 @@ public class RerankerTests : IAsyncLifetime
 #elif CUDA
         outputHelper.WriteLine("Running on CUDA.");
         _model.Initialize(providers: ExecutionProvider.CUDA | ExecutionProvider.CPU);
+#elif OSX
+        outputHelper.WriteLine("Running on CoreML.");
+        _model.Initialize(providers: ExecutionProvider.CoreML | ExecutionProvider.CPU);
 #else
         outputHelper.WriteLine("Running on CPU.");
         _model.Initialize();

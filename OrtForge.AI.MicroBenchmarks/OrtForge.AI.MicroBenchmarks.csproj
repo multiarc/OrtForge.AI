@@ -21,6 +21,11 @@
                 <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
             </PropertyGroup>
         </When>
+        <When Condition="$([MSBuild]::IsOSPlatform('OSX'))">
+            <PropertyGroup>
+                <DefineConstants>$(DefineConstants);OSX</DefineConstants>
+            </PropertyGroup>
+        </When>
     </Choose>
     <Choose>
         <When Condition="$(OrtTarget) == 'ROCM'">

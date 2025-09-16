@@ -14,8 +14,8 @@ public class EmbeddingGenerationTests
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         _model = new BgeM3Model(new BgeM3Options
         {
-            TokenizerModelPath = Path.Combine(home, "LLM/bge_m3_onnx_gpu/sentencepiece.bpe.model"), 
-            ModelPath = Path.Combine(home, "LLM/bge_m3_onnx_gpu/model.onnx"),
+            TokenizerModelPath = Path.Combine(home, "LLM/BGE-M3-ONNX/sentencepiece.bpe.model"), 
+            ModelPath = Path.Combine(home, "LLM/BGE-M3-ONNX/model.onnx"),
             TensorElementType = TensorElementType.Float16
         });
 #if WINDOWS
@@ -27,6 +27,9 @@ public class EmbeddingGenerationTests
 #elif CUDA
         outputHelper.WriteLine("Running on CUDA.");
         _model.Initialize(providers: ExecutionProvider.CUDA | ExecutionProvider.CPU);
+#elif OSX
+        outputHelper.WriteLine("Running on CoreML.");
+        _model.Initialize(providers: ExecutionProvider.CoreML | ExecutionProvider.CPU);
 #else
         outputHelper.WriteLine("Running on CPU.");
         _model.Initialize();
