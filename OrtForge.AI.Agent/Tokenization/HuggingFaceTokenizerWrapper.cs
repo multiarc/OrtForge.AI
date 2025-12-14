@@ -16,6 +16,9 @@ public sealed class HuggingFaceTokenizerWrapper : Tokenizer
         _hfTokenizer = hfTokenizer ?? throw new ArgumentNullException(nameof(hfTokenizer));
     }
 
+    // BOS token ID for Llama 3 models - the tokenizer auto-adds this
+    private const uint Llama3BosTokenId = 128000;
+    
     //TODO: replace with Span able implementation
     protected override EncodeResults<EncodedToken> EncodeToTokens(string? text, ReadOnlySpan<char> textSpan,
         EncodeSettings settings)
@@ -30,6 +33,14 @@ public sealed class HuggingFaceTokenizerWrapper : Tokenizer
             else
             {
                 tokenIds = _hfTokenizer.Encode(new string(textSpan));
+            }
+
+            // Strip the auto-added BOS token if present
+            // The Tokenizers.DotNet library automatically adds BOS to every encoding,
+            // which corrupts prompts that already include <|begin_of_text|>
+            if (tokenIds.Length > 0 && tokenIds[0] == Llama3BosTokenId)
+            {
+                tokenIds = tokenIds[1..];
             }
 
             var encodedTokens = new List<EncodedToken>(tokenIds.Length);

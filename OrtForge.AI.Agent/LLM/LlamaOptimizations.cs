@@ -29,31 +29,43 @@ public static class LlamaOptimizations
         var stopTokenIds = ModelStopTokens.GetValueOrDefault(modelType, ModelStopTokens[ModelType.Default]);
         var stopSequences = ModelStopSequences.GetValueOrDefault(modelType, ModelStopSequences[ModelType.Default]);
 
+        // Use model-specific stop tokens, only add base config tokens if they're non-empty and valid
+        var mergedStopTokens = new HashSet<int>(stopTokenIds);
+        foreach (var token in baseConfig.StopTokenIds)
+        {
+            // Only add tokens > 127999 (special tokens range for Llama 3) or explicitly set
+            if (token >= 128000)
+            {
+                mergedStopTokens.Add(token);
+            }
+        }
+
         return baseConfig with
         {
-            StopTokenIds = [..stopTokenIds.Concat(baseConfig.StopTokenIds)],
-            StopSequences = stopSequences.Concat(baseConfig.StopSequences).ToArray(),
+            StopTokenIds = mergedStopTokens,
+            StopSequences = stopSequences.Concat(baseConfig.StopSequences).Distinct().ToArray(),
             Temperature = modelType.IsLlama3Family() ? Math.Max(0.1, baseConfig.Temperature) : baseConfig.Temperature,
             TopP = modelType.IsLlama3Family() ? Math.Min(0.95, baseConfig.TopP) : baseConfig.TopP
         };
     }
 
-    public static long[] CreateOptimalPositionIds(int sequenceLength, int currentStep)
+    /// <summary>
+    /// Creates position IDs for the current inference step.
+    /// </summary>
+    /// <param name="totalSequenceLength">Total sequence length after adding new tokens</param>
+    /// <param name="newTokenCount">Number of new tokens being added</param>
+    /// <returns>Position IDs array of length newTokenCount</returns>
+    public static long[] CreateOptimalPositionIds(int totalSequenceLength, int newTokenCount)
     {
-        if (currentStep == 0)
+        // Position IDs should be [startPos, startPos+1, ..., startPos+newTokenCount-1]
+        // where startPos = totalSequenceLength - newTokenCount
+        var startPosition = totalSequenceLength - newTokenCount;
+        var positionIds = new long[newTokenCount];
+        for (int i = 0; i < newTokenCount; i++)
         {
-            var positionIds = new long[sequenceLength];
-            for (int i = 0; i < sequenceLength; i++)
-            {
-                positionIds[i] = i;
-            }
-            return positionIds;
+            positionIds[i] = startPosition + i;
         }
-        else
-        {
-            var posId = new long[] { sequenceLength - 1 };
-            return posId;
-        }
+        return positionIds;
     }
 
     public static long[]? CreateOptimalAttentionMask(int totalSequenceLength)

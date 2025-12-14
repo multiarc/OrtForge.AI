@@ -14,14 +14,16 @@ public sealed class ConversationSession : IDisposable
     private readonly InferenceConfig _inferenceConfig;
     private KvState _kvState;
     private bool _isSystemPromptProcessed;
+    private readonly TokenHistory _tokenHistory;
     public StringBuilder EntireConversation { get; } = new();
 
-    public ConversationSession(LlamaSession llm, TokenizerService tokenizer, InferenceConfig inferenceConfig)
+    public ConversationSession(LlamaSession llm, TokenizerService tokenizer, InferenceConfig inferenceConfig, int repetitionPenaltyWindowSize = 128)
     {
         _llm = llm;
         _inferenceConfig = inferenceConfig;
         _tokenizer = tokenizer;
         _kvState = new KvState([]);
+        _tokenHistory = new TokenHistory(repetitionPenaltyWindowSize);
     }
 
     public string SessionId { get; } = Guid.NewGuid().ToString("N")[..8];
@@ -37,26 +39,36 @@ public sealed class ConversationSession : IDisposable
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         EntireConversation.Append(prompt);
-        var generatedTokens = new List<int>();
         var toolState = new ToolCallState();
         var inputIds = _tokenizer.EncodeToIds(prompt).Select(x => (long)x).ToArray();
+        var isFirstToken = true;
 
         for (int token = 0; token < _inferenceConfig.MaxTokens; token++)
         {
             using var outputs =
                 await _llm.RunOptimizedStepAsync(inputIds, _kvState, _kvState.AccumulatedSequenceLength + inputIds.Length,
                     cancellationToken);
+            
+            // Dispose previous KV state to prevent memory leak
+            var oldKvState = _kvState;
             _kvState = outputs.KvCache;
-            var nextToken = GetNextTokenSample(outputs, generatedTokens);
+            oldKvState.Dispose();
+            
+            // Use sliding window token history for repetition penalty
+            var nextToken = GetNextTokenSample(outputs, _tokenHistory.GetTokens());
             var tokenText = _tokenizer.DecodeFromIds([nextToken]);
             EntireConversation.Append(tokenText);
             
             if (IsStopToken(nextToken))
             {
+                _isSystemPromptProcessed = true;
+                // Append the stop token text to conversation for proper multi-turn format
+                EntireConversation.Append("<|eot_id|>");
                 yield break;
             }
             
-            generatedTokens.Add(nextToken);
+            // Add to sliding window for cross-turn repetition penalty
+            _tokenHistory.AddToken(nextToken);
             
             //inject current token into next inference step
             inputIds = [nextToken];
@@ -69,6 +81,13 @@ public sealed class ConversationSession : IDisposable
                 {
                     //TODO
                 }
+            }
+
+            // Mark session as initialized after first token generated
+            if (isFirstToken)
+            {
+                _isSystemPromptProcessed = true;
+                isFirstToken = false;
             }
 
             yield return tokenText;

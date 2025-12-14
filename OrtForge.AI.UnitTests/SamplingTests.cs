@@ -57,7 +57,7 @@ public class SamplingTests
         var previousTokens = new int[] { 4, 4, 4 };
         var config = new InferenceConfig { RepetitionPenalty = 1.2, TopK = 5, Temperature = 0.1, Seed = 42 };
         
-        var idx = Sampling.Sample(logits, config, [], new Random(42));
+        var idx = Sampling.Sample(logits, config, previousTokens.ToList(), new Random(42));
         
         Assert.NotEqual(4, idx);
     }
@@ -74,5 +74,26 @@ public class SamplingTests
             var idx = Sampling.Sample(logits, config, [], rng);
             Assert.Contains(idx, new[] { 3, 4 });
         }
+    }
+    
+    [Fact]
+    public void Sample_WithRepetitionPenaltyOfOne_DoesNotModifyLogits()
+    {
+        // Arrange - penalty of 1.0 should be a no-op
+        var logits = new float[] { 1f, 2f, 3f, 4f, 5f };
+        var previousTokens = new int[] { 4, 4, 4 };
+        
+        // Config with penalty = 1.0 (should be no-op)
+        var configWithPenalty = new InferenceConfig { RepetitionPenalty = 1.0, TopK = 5, Temperature = 0.01, Seed = 42 };
+        
+        // Config without penalty
+        var configWithoutPenalty = new InferenceConfig { RepetitionPenalty = 0.0, TopK = 5, Temperature = 0.01, Seed = 42 };
+        
+        // Both should behave the same - select token 4 (highest logit)
+        var idxWithPenalty = Sampling.Sample(logits, configWithPenalty, previousTokens.ToList(), new Random(42));
+        var idxWithoutPenalty = Sampling.Sample(logits, configWithoutPenalty, previousTokens.ToList(), new Random(42));
+        
+        Assert.Equal(idxWithoutPenalty, idxWithPenalty);
+        Assert.Equal(4, idxWithPenalty); // Both should select token 4 (highest logit, unpenalized)
     }
 }

@@ -5,11 +5,24 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
+    <!-- Set to 'GPU' to use CUDA, 'CPU' for CPU-only -->
+    <OrtRuntime Condition="'$(OrtRuntime)' == ''">DirectML</OrtRuntime>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\OrtForge.AI.Agent\OrtForge.AI.Agent.csproj" />
     <ProjectReference Include="..\OrtForge.AI.Models\OrtForge.AI.Models.csproj" />
-    <ProjectReference Include="..\OrtForge.AI.Runtime.ROCm\OrtForge.AI.Runtime.ROCm.csproj" />
+  </ItemGroup>
+  <!-- CPU Runtime -->
+  <ItemGroup Condition="'$(OrtRuntime)' == 'CPU'">
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.23.2" />
+  </ItemGroup>
+  <!-- GPU (CUDA) Runtime -->
+  <ItemGroup Condition="'$(OrtRuntime)' == 'GPU'">
+    <ProjectReference Include="..\OrtForge.AI.Runtime.CUDA\OrtForge.AI.Runtime.CUDA.csproj" />
+  </ItemGroup>
+  <!-- DirectML Runtime -->
+  <ItemGroup Condition="'$(OrtRuntime)' == 'DirectML'">
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.DirectML" Version="1.23.0" />
   </ItemGroup>
 </Project>
 

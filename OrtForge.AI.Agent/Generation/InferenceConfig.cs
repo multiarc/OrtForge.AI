@@ -14,7 +14,7 @@ public sealed record InferenceConfig
     public double MinP { get; init; } = 0.0;
     public double TfsZ { get; init; } = 1.0;
     public double TypicalP { get; init; } = 1.0;
-    public HashSet<int> StopTokenIds { get; init; } = [0, 2];
+    public HashSet<int> StopTokenIds { get; init; } = [];  // Model-specific, set by LlamaOptimizations
     public string[] StopSequences { get; init; } = [];
     
     public static InferenceConfig Default => new()

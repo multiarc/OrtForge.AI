@@ -90,31 +90,32 @@ public sealed class AgentOrchestrator
         };
     }
 
-    internal static bool IsStopToken(int tokenId, InferenceConfig config) => config.StopTokenIds.Contains(tokenId);
+    public static bool IsStopToken(int tokenId, InferenceConfig config) => config.StopTokenIds.Contains(tokenId);
 
-    internal static bool IsStopSequence(string text, InferenceConfig config)
+    public static bool IsStopSequence(string text, InferenceConfig config)
     {
         return config.StopSequences.Any(seq => text.Contains(seq));
     }
 
-    internal static string BuildSystemPrompt(IReadOnlyList<string> retrieved, string firstUserMessage, bool enableTools = false)
+    public static string BuildSystemPrompt(IReadOnlyList<string> retrieved, string firstUserMessage, bool enableTools = false)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("<|begin_of_text|><|start_header_id|>system<|end_header_id|>");
-        sb.AppendLine("Answer questions best to your knowledge.");
-        sb.AppendLine("<|eot_id|>");
-        sb.AppendLine("<|start_header_id|>user<|end_header_id|>");
-        sb.AppendLine(firstUserMessage);
+        
+        // Llama 3.1 chat template: blank line after header, eot_id on same line as content
+        sb.Append("<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n");
+        sb.Append("You are a helpful AI assistant. Answer questions accurately and concisely.");
+        sb.Append("<|eot_id|><|start_header_id|>user<|end_header_id|>\n\n");
+        sb.Append(firstUserMessage);
+        
         if (retrieved.Count > 0)
         {
+            sb.AppendLine();
             sb.AppendLine("## Available Context:");
             for (int i = 0; i < retrieved.Count; i++)
             {
-                sb.AppendLine($"**Source {i + 1}:**");
-                sb.AppendLine($"> {retrieved[i]}");
+                sb.AppendLine($"**Source {i + 1}:** {retrieved[i]}");
             }
         }
-        sb.AppendLine("<|eot_id|>");
         
         if (enableTools)
         {
@@ -127,29 +128,30 @@ public sealed class AgentOrchestrator
             sb.AppendLine("args: tool_arguments");
             sb.AppendLine("END_TOOL_CALL");
             sb.AppendLine("```");
-            sb.AppendLine("The tool result will be provided in TOOL_RESULT...END_TOOL_RESULT tags.");
         }
         
-        sb.AppendLine("<|start_header_id|>assistant<|end_header_id|>");
+        sb.Append("<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n");
         
         return sb.ToString();
     }
 
-    internal static string BuildChatTurnPrompt(IReadOnlyList<string> retrieved, string user, bool enableTools = false)
+    public static string BuildChatTurnPrompt(IReadOnlyList<string> retrieved, string user, bool enableTools = false)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("<|start_header_id|>user<|end_header_id|>");
-        sb.AppendLine(user);
+        
+        // Llama 3.1 chat template: blank line after header, eot_id on same line as content
+        sb.Append("<|start_header_id|>user<|end_header_id|>\n\n");
+        sb.Append(user);
+        
         if (retrieved.Count > 0)
         {
+            sb.AppendLine();
             sb.AppendLine("## Available Context:");
             for (int i = 0; i < retrieved.Count; i++)
             {
-                sb.AppendLine($"**Source {i + 1}:**");
-                sb.AppendLine($"> {retrieved[i]}");
+                sb.AppendLine($"**Source {i + 1}:** {retrieved[i]}");
             }
         }
-        sb.AppendLine("<|eot_id|>");
         
         if (enableTools)
         {
@@ -162,10 +164,9 @@ public sealed class AgentOrchestrator
             sb.AppendLine("args: tool_arguments");
             sb.AppendLine("END_TOOL_CALL");
             sb.AppendLine("```");
-            sb.AppendLine("The tool result will be provided in TOOL_RESULT...END_TOOL_RESULT tags.");
         }
         
-        sb.AppendLine("<|start_header_id|>assistant<|end_header_id|>");
+        sb.Append("<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n");
         return sb.ToString();
     }
 }

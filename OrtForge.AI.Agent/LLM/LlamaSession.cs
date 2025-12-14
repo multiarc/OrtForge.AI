@@ -9,8 +9,8 @@ public sealed class LlamaSession : IDisposable
 {
     private readonly InferenceSession _session;
     private readonly KvTensorMappingStrategy _kvMapping;
-    private string[] _outputNames;
-    private string[] _inputNames;
+    private string[] _outputNames = [];
+    private string[] _inputNames = [];
     private readonly Dictionary<string, KvTensorInfo> _kvOutputs = new();
     private readonly Dictionary<string, KvTensorInfo> _kvInputs = new();
 
@@ -33,22 +33,16 @@ public sealed class LlamaSession : IDisposable
     {
         var inputShape = inputs.InputIds.GetTensorTypeAndShape().Shape;
         var batchSize = inputShape[0];
-        var currentInputLength = inputShape[1];  // Length of current input tokens
         
-        var totalSequenceLength = inputs.Kv.CalculateTotalLengthAfterTokens((int)currentInputLength);
+        // All required inputs must be provided to avoid memory leaks from untracked OrtValues
+        if (inputs.PositionIds == null)
+            throw new ArgumentException("PositionIds must be provided", nameof(inputs));
+        if (inputs.AttentionMask == null)
+            throw new ArgumentException("AttentionMask must be provided", nameof(inputs));
+        
         modelInputs[0] = inputs.InputIds;
-        //modelInputs[1] = inputs.PositionIds;
-        if (inputs.AttentionMask != null)
-        {
-            modelInputs[1] = inputs.AttentionMask;
-        }
-        else
-        {
-            var defaultAttentionMask = new long[totalSequenceLength];
-            Array.Fill(defaultAttentionMask, 1L);
-            var attentionMaskOrt = OrtValue.CreateTensorValueFromMemory(defaultAttentionMask, [1, totalSequenceLength]);
-            modelInputs[1] = attentionMaskOrt;
-        }
+        modelInputs[1] = inputs.PositionIds;
+        modelInputs[2] = inputs.AttentionMask;
         
         if (inputs.Kv.Tensors.Count > 0)
         {
@@ -149,8 +143,8 @@ public sealed class LlamaSession : IDisposable
         if (!inputMetadata.ContainsKey("input_ids"))
             throw new InvalidOperationException("Model has to have 'input_ids'.");
         
-        // if (!inputMetadata.ContainsKey("position_ids"))
-        //     throw new InvalidOperationException("Model has to have 'position_ids'.");
+        if (!inputMetadata.ContainsKey("position_ids"))
+            throw new InvalidOperationException("Model has to have 'position_ids'.");
         
         if (!inputMetadata.ContainsKey("attention_mask"))
             throw new InvalidOperationException("Model has to have 'attention_mask'.");
@@ -161,11 +155,11 @@ public sealed class LlamaSession : IDisposable
         var inputNames = new List<string>
         {
             "input_ids",
-            //"position_ids",
+            "position_ids",
             "attention_mask"
         };
 
-        var inputOffset = 2;
+        var inputOffset = 3;
         foreach (var inputName in inputMetadata.Keys)
         {
             if (_kvMapping.IsKvInput(inputName))
@@ -211,12 +205,12 @@ public sealed class LlamaSession : IDisposable
         _outputNames = outputNames.ToArray();
     }
 
-    public async Task<StepOutputs> RunOptimizedStepAsync(long[] inputIds, KvState kv, int sequenceLength, CancellationToken cancellationToken = default)
+    public async Task<StepOutputs> RunOptimizedStepAsync(long[] inputIds, KvState kv, int totalSequenceLength, CancellationToken cancellationToken = default)
     {
-        //var positionIds = LlamaOptimizations.CreateOptimalPositionIds(sequenceLength, currentStep);
-        var attentionMask = LlamaOptimizations.CreateOptimalAttentionMask(sequenceLength);
+        var positionIds = LlamaOptimizations.CreateOptimalPositionIds(totalSequenceLength, inputIds.Length);
+        var attentionMask = LlamaOptimizations.CreateOptimalAttentionMask(totalSequenceLength);
         
-        using var inputs = StepInputs.Create(inputIds, kv, null, attentionMask);
+        using var inputs = StepInputs.Create(inputIds, kv, positionIds, attentionMask);
         return await RunStepAsync(inputs, cancellationToken);
     }
     
@@ -258,27 +252,40 @@ public sealed class LlamaSession : IDisposable
             long[]? positionIds = null,
             long[]? attentionMask = null)
         {
-            var inputIdsOrt = OrtValue.CreateTensorValueFromMemory(
-                inputIds, 
-                [1, inputIds.Length]);
-                
+            OrtValue? inputIdsOrt = null;
             OrtValue? positionIdsOrt = null;
-            if (positionIds != null)
-            {
-                positionIdsOrt = OrtValue.CreateTensorValueFromMemory(
-                    positionIds,
-                    [1, positionIds.Length]);
-            }
-            
             OrtValue? attentionMaskOrt = null;
-            if (attentionMask != null)
-            {
-                attentionMaskOrt = OrtValue.CreateTensorValueFromMemory(
-                    attentionMask,
-                    [1, attentionMask.Length]);
-            }
             
-            return new StepInputs(inputIdsOrt, kv, positionIdsOrt, attentionMaskOrt);
+            try
+            {
+                inputIdsOrt = OrtValue.CreateTensorValueFromMemory(
+                    inputIds, 
+                    [1, inputIds.Length]);
+                    
+                if (positionIds != null)
+                {
+                    positionIdsOrt = OrtValue.CreateTensorValueFromMemory(
+                        positionIds,
+                        [1, positionIds.Length]);
+                }
+                
+                if (attentionMask != null)
+                {
+                    attentionMaskOrt = OrtValue.CreateTensorValueFromMemory(
+                        attentionMask,
+                        [1, attentionMask.Length]);
+                }
+                
+                return new StepInputs(inputIdsOrt, kv, positionIdsOrt, attentionMaskOrt);
+            }
+            catch
+            {
+                // Dispose already-created OrtValues on exception to prevent memory leak
+                inputIdsOrt?.Dispose();
+                positionIdsOrt?.Dispose();
+                attentionMaskOrt?.Dispose();
+                throw;
+            }
         }
     }
 
@@ -351,15 +358,15 @@ public sealed class LlamaSession : IDisposable
 
     public sealed class OutputKvTensor
     {
-        public KvTensorInfo Info { get; init; }
-        public OrtValue Tensor { get; set; }
+        public required KvTensorInfo Info { get; init; }
+        public required OrtValue Tensor { get; set; }
     }
 
     public sealed class KvTensorInfo
     {
-        public string Name { get; init; }
+        public required string Name { get; init; }
         public TensorElementType ElementType { get; init; }
-        public long[] Dimensions { get; init; }
+        public required long[] Dimensions { get; init; }
         public int Offset { get; init; }
     }
 }

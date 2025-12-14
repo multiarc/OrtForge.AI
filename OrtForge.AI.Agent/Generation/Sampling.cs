@@ -2,7 +2,7 @@ namespace OrtForge.AI.Agent.Generation;
 
 public static class Sampling
 {
-    public static int Sample(ReadOnlySpan<float> logits, InferenceConfig config, List<int> previousTokens = default, Random? rng = null)
+    public static int Sample(ReadOnlySpan<float> logits, InferenceConfig config, List<int>? previousTokens = null, Random? rng = null)
     {
         rng ??= config.Seed.HasValue ? new Random(config.Seed.Value) : Random.Shared;
 
@@ -13,19 +13,22 @@ public static class Sampling
 
         var logitsArray = logits.ToArray();
         
-        if (config.RepetitionPenalty > 0 && previousTokens.Count > 0)
+        if (previousTokens is { Count: > 0 })
         {
-            ApplyRepetitionPenalty(logitsArray, previousTokens, config.RepetitionPenalty);
-        }
-        
-        if (config.FrequencyPenalty > 0.0 && previousTokens.Count > 0)
-        {
-            ApplyFrequencyPenalty(logitsArray, previousTokens, config.FrequencyPenalty);
-        }
-        
-        if (config.PresencePenalty > 0.0 && previousTokens.Count > 0)
-        {
-            ApplyPresencePenalty(logitsArray, previousTokens, config.PresencePenalty);
+            if (config.RepetitionPenalty > 1.0)
+            {
+                ApplyRepetitionPenalty(logitsArray, previousTokens, config.RepetitionPenalty);
+            }
+            
+            if (config.FrequencyPenalty > 0.0)
+            {
+                ApplyFrequencyPenalty(logitsArray, previousTokens, config.FrequencyPenalty);
+            }
+            
+            if (config.PresencePenalty > 0.0)
+            {
+                ApplyPresencePenalty(logitsArray, previousTokens, config.PresencePenalty);
+            }
         }
 
         var probs = Softmax(logitsArray, config.Temperature);
@@ -92,7 +95,8 @@ public static class Sampling
 
     private static void ApplyRepetitionPenalty(float[] logits, List<int> previousTokens, double penalty)
     {
-        if (penalty <= 0)
+        // Skip if penalty is 1.0 or less (1.0 is no-op, <= 0 is invalid)
+        if (penalty <= 1.0)
             return;
         
         var tokenCounts = new Dictionary<int, int>();

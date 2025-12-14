@@ -20,6 +20,8 @@ public enum ToolCallStatus
 
 public sealed class ToolCallState
 {
+    private const int MaxBufferSize = 8192; // Limit buffer to prevent unbounded growth
+    
     private readonly List<ToolCall> _calls = [];
     private string _currentBuffer = string.Empty;
     private bool _inToolCall = false;
@@ -32,13 +34,26 @@ public sealed class ToolCallState
     public void AppendToken(string token)
     {
         _currentBuffer += token;
+        TrimBufferIfNeeded();
         CheckForToolCallPatterns();
     }
 
     public void AppendText(string text)
     {
         _currentBuffer += text;
+        TrimBufferIfNeeded();
         CheckForToolCallPatterns();
+    }
+    
+    private void TrimBufferIfNeeded()
+    {
+        // If buffer exceeds max size and we're not in a tool call, keep only the tail
+        if (_currentBuffer.Length > MaxBufferSize && !_inToolCall)
+        {
+            // Keep the last portion that might contain a partial TOOL_CALL marker
+            var keepSize = Math.Min(MaxBufferSize / 2, _currentBuffer.Length);
+            _currentBuffer = _currentBuffer.Substring(_currentBuffer.Length - keepSize);
+        }
     }
 
     public ToolCall? GetNextPendingCall()
@@ -63,32 +78,51 @@ public sealed class ToolCallState
         _toolCallStart = -1;
     }
 
+    private const string StartMarker = "TOOL_CALL";
+    private const string EndMarker = "END_TOOL_CALL";
+    
     private void CheckForToolCallPatterns()
     {
-        if (!_inToolCall)
+        // Keep checking for tool calls until no more complete ones are found
+        while (true)
         {
-            var startIndex = _currentBuffer.IndexOf("<|tool_call|>", StringComparison.Ordinal);
-            if (startIndex >= 0)
+            if (!_inToolCall)
             {
-                _inToolCall = true;
-                _toolCallStart = startIndex;
-            }
-        }
-
-        if (_inToolCall)
-        {
-            var endIndex = _currentBuffer.IndexOf("<|/tool_call|>", _toolCallStart, StringComparison.Ordinal);
-            if (endIndex >= 0)
-            {
-                var callContent = _currentBuffer.Substring(_toolCallStart + 14, endIndex - (_toolCallStart + 14));
-                var toolCall = ParseToolCallContent(callContent);
-                if (toolCall != null)
+                var startIndex = _currentBuffer.IndexOf(StartMarker, StringComparison.Ordinal);
+                if (startIndex >= 0)
                 {
-                    _calls.Add(toolCall);
+                    _inToolCall = true;
+                    _toolCallStart = startIndex;
                 }
-                
-                _inToolCall = false;
-                _toolCallStart = -1;
+                else
+                {
+                    break; // No more tool call starts found
+                }
+            }
+
+            if (_inToolCall)
+            {
+                var endIndex = _currentBuffer.IndexOf(EndMarker, _toolCallStart, StringComparison.Ordinal);
+                if (endIndex >= 0)
+                {
+                    // Extract content between TOOL_CALL and END_TOOL_CALL
+                    var contentStart = _toolCallStart + StartMarker.Length;
+                    var callContent = _currentBuffer.Substring(contentStart, endIndex - contentStart);
+                    var toolCall = ParseToolCallContent(callContent);
+                    if (toolCall != null)
+                    {
+                        _calls.Add(toolCall);
+                    }
+                    
+                    // Remove processed content from buffer to allow finding next tool call
+                    _currentBuffer = _currentBuffer.Substring(endIndex + EndMarker.Length);
+                    _inToolCall = false;
+                    _toolCallStart = -1;
+                }
+                else
+                {
+                    break; // Incomplete tool call, wait for more tokens
+                }
             }
         }
     }

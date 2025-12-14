@@ -30,7 +30,7 @@ public class ToolCallStateTests
     public void ToolCallState_DetectsCompleteToolCall()
     {
         var state = new ToolCallState();
-        state.AppendText("<|tool_call|>\nname: test_tool\nargs: test_args\n<|/tool_call|>");
+        state.AppendText("TOOL_CALL\nname: test_tool\nargs: test_args\nEND_TOOL_CALL");
         
         Assert.True(state.HasPendingCalls);
         var call = state.GetNextPendingCall();
@@ -44,7 +44,7 @@ public class ToolCallStateTests
     public void ToolCallState_HandlesIncompleteCall()
     {
         var state = new ToolCallState();
-        state.AppendToken("<|tool_call|>");
+        state.AppendToken("TOOL_CALL");
         state.AppendToken("\nname: ");
         state.AppendToken("test");
         
@@ -56,7 +56,7 @@ public class ToolCallStateTests
     public void ToolCallState_UpdatesCallStatus()
     {
         var state = new ToolCallState();
-        state.AppendText("<|tool_call|>\nname: test\nargs: args\n<|/tool_call|>");
+        state.AppendText("TOOL_CALL\nname: test\nargs: args\nEND_TOOL_CALL");
         
         var call = state.GetNextPendingCall();
         Assert.NotNull(call);
@@ -73,7 +73,7 @@ public class ToolCallStateTests
     public void ToolCallState_ResetClearsState()
     {
         var state = new ToolCallState();
-        state.AppendText("<|tool_call|>\nname: test\nargs: args\n<|/tool_call|>");
+        state.AppendText("TOOL_CALL\nname: test\nargs: args\nEND_TOOL_CALL");
         
         Assert.True(state.HasPendingCalls);
         state.Reset();

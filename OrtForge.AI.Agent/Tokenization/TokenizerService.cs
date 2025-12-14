@@ -74,10 +74,18 @@ public sealed class TokenizerService
         }
     }
 
-    public int[] EncodeToIds(string text)
+    public int[] EncodeToIds(string text, bool addBos = true)
     {
         var tokens = _tokenizer.EncodeToTokens(text, out _);
-        return tokens.Select(t => t.Id).ToArray();
+        var ids = tokens.Select(t => t.Id).ToArray();
+        
+        // Tokenizer automatically adds BOS (128000). Skip it if not wanted.
+        if (!addBos && ids.Length > 0 && ids[0] == 128000)
+        {
+            return ids.Skip(1).ToArray();
+        }
+        
+        return ids;
     }
 
     public string DecodeFromIds(IReadOnlyList<int> ids)
