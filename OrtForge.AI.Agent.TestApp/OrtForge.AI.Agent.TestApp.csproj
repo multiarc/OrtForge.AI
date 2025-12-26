@@ -6,7 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
     <!-- Set to 'GPU' to use CUDA, 'CPU' for CPU-only -->
-    <OrtRuntime Condition="'$(OrtRuntime)' == ''">DirectML</OrtRuntime>
+    <OrtRuntime Condition="'$(OrtRuntime)' == ''">MigraphX</OrtRuntime>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\OrtForge.AI.Agent\OrtForge.AI.Agent.csproj" />
@@ -19,6 +19,9 @@
   <!-- GPU (CUDA) Runtime -->
   <ItemGroup Condition="'$(OrtRuntime)' == 'GPU'">
     <ProjectReference Include="..\OrtForge.AI.Runtime.CUDA\OrtForge.AI.Runtime.CUDA.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(OrtRuntime)' == 'MigraphX'">
+    <ProjectReference Include="..\OrtForge.AI.Runtime.MigraphX\OrtForge.AI.Runtime.MigraphX.csproj" />
   </ItemGroup>
   <!-- DirectML Runtime -->
   <ItemGroup Condition="'$(OrtRuntime)' == 'DirectML'">

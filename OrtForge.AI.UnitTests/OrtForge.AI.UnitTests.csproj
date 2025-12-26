@@ -80,7 +80,7 @@
     <ItemGroup>
       <ProjectReference Include="..\OrtForge.AI.Agent\OrtForge.AI.Agent.csproj" />
       <ProjectReference Include="..\OrtForge.AI.Models\OrtForge.AI.Models.csproj" />
-      <ProjectReference Include="..\OrtForge.AI.Runtime.ROCm\OrtForge.AI.Runtime.ROCm.csproj" />
+      <ProjectReference Include="..\OrtForge.AI.Runtime.MigraphX\OrtForge.AI.Runtime.MigraphX.csproj" />
     </ItemGroup>
 
 </Project>

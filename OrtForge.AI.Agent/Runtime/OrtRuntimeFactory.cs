@@ -19,7 +19,7 @@ public static class OrtRuntimeFactory
         var so = new SessionOptions();
         so.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL;
         so.ExecutionMode = ExecutionMode.ORT_SEQUENTIAL;
-        //so.AppendExecutionProvider_ROCm();
+        so.AppendExecutionProvider_MIGraphX();
         so.AppendExecutionProvider_CPU();
         so.LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_WARNING;
         return so;
