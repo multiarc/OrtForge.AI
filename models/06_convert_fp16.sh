@@ -23,33 +23,10 @@ echo "Input:  $INPUT_FILE"
 echo "Output: $OUTPUT_FILE"
 echo "=============================================="
 
-python3 << EOF
-import onnx
-from onnxconverter_common import float16
-from pathlib import Path
+# Export variables for Python
+export INPUT_FILE OUTPUT_FILE
 
-input_file = "$INPUT_FILE"
-output_file = "$OUTPUT_FILE"
-
-print("Loading model...")
-model = onnx.load(input_file, load_external_data=True)
-
-print("Converting to FP16...")
-model_fp16 = float16.convert_float_to_float16(
-    model,
-    keep_io_types=True,  # Keep inputs/outputs as FP32 for compatibility
-)
-
-print("Saving model...")
-onnx.save(model_fp16, output_file)
-
-input_size = Path(input_file).stat().st_size / (1024**3)
-output_size = Path(output_file).stat().st_size / (1024**3)
-reduction = (1 - output_size / input_size) * 100
-
-print(f"\n✅ Conversion complete!")
-print(f"   Input size:  {input_size:.2f} GB")
-print(f"   Output size: {output_size:.2f} GB")
-print(f"   Reduction:   {reduction:.1f}%")
-EOF
+# Run Python script
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 "$SCRIPT_DIR/py/convert_fp16.py"
 

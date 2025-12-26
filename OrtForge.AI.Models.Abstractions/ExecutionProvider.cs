@@ -1,4 +1,4 @@
-namespace OrtForge.AI.Models.Astractions;
+namespace OrtForge.AI.Models.Abstractions;
 
 [Flags]
 public enum ExecutionProvider

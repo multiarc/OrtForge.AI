@@ -1,7 +1,7 @@
 ﻿using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using Microsoft.ML.Tokenizers;
-using OrtForge.AI.Models.Astractions;
+using OrtForge.AI.Models.Abstractions;
 using OrtForge.AI.Models.Options;
 
 namespace OrtForge.AI.Models.Models;

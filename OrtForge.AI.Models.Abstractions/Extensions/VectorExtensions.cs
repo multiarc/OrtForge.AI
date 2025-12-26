@@ -3,7 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.Intrinsics;
 using Microsoft.ML.OnnxRuntime;
 
-namespace OrtForge.AI.Models.Astractions.Extensions;
+namespace OrtForge.AI.Models.Abstractions.Extensions;
 
 public static class VectorExtensions
 {
