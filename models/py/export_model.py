@@ -4,6 +4,13 @@ export_model.py - Export HuggingFace model to ONNX for Inference
 
 Custom ONNX export with KV cache support using modern torch.export.
 Does NOT require optimum library.
+
+IMPORTANT NOTES:
+- Exports on CPU by default (set FORCE_CPU_EXPORT=false to use GPU)
+- CPU export is RECOMMENDED for stability, especially with PyTorch nightly builds
+- ONNX models are device-agnostic: CPU-exported models run fine on GPU/MIGraphX
+- For PyTorch stable (non-nightly), either CPU or GPU export works
+- For ROCm nightly builds, CPU export avoids potential issues
 """
 
 import sys
@@ -25,17 +32,19 @@ class OnnxExportWrapper(torch.nn.Module):
     """
     Wrapper for ONNX export that converts flat KV cache tensors to DynamicCache.
 
-    Input signature (all tensors - export friendly):
-        - input_ids: (batch, seq_len)
-        - attention_mask: (batch, total_seq_len)
-        - position_ids: (batch, seq_len) - REQUIRED for proper KV cache output
+    Input signature:
+        - input_ids: (batch, seq_len) - token IDs
+        - attention_mask: (batch, seq_len) - attention mask
+        - past_seq_len: (256,) - padded tensor with past sequence length in first element (used to compute position_ids)
         - past_kv_flat: tuple of 2*num_layers tensors, each (batch, num_kv_heads, past_seq, head_dim)
 
     Output signature:
         - logits: (batch, seq_len, vocab_size)
         - present_kv_flat: tuple of 2*num_layers tensors
 
-    NOTE: position_ids is essential - without it, model may only output KV for last position!
+    Note: position_ids is computed internally from past_seq_len[0] to avoid MIGraphX
+    hipHostRegister failures. The past_seq_len input is padded to 256 elements (2048 bytes)
+    to meet MIGraphX minimum buffer size requirements for hipHostRegister.
     """
 
     def __init__(self, model, num_layers, num_kv_heads, head_dim, dtype):
@@ -46,10 +55,16 @@ class OnnxExportWrapper(torch.nn.Module):
         self.head_dim = head_dim
         self.dtype = dtype
 
-    def forward(self, input_ids, attention_mask, position_ids, past_kv_flat):
+    def forward(self, input_ids, attention_mask, past_seq_len_tensor, past_kv_flat):
         """
         Forward pass with flat KV cache tensors as a tuple.
-        position_ids ensures model computes KV for ALL input positions.
+        Computes position_ids internally to avoid hipHostRegister issues with small buffers.
+
+        Args:
+            input_ids: (batch, seq_len)
+            attention_mask: (batch, seq_len)
+            past_seq_len_tensor: (256,) padded tensor with past sequence length in first element
+            past_kv_flat: tuple of KV cache tensors
         """
         # Reconstruct DynamicCache from flat tensors
         past_key_values = DynamicCache()
@@ -60,7 +75,22 @@ class OnnxExportWrapper(torch.nn.Module):
                 value = past_kv_flat[2 * i + 1]
                 past_key_values.update(key, value, i)
 
-        # Call model with position_ids to ensure KV is computed for all positions
+        # Compute position_ids internally from past_seq_len
+        # past_seq_len_tensor is padded to 256 elements to avoid hipHostRegister failures
+        # Extract the first element using pure tensor operations (no .item() to avoid CPU copy)
+        batch_size = input_ids.shape[0]
+        seq_len = input_ids.shape[1]
+
+        # Extract scalar using tensor indexing (stays on device, no CPU transfer)
+        past_seq_len_scalar = past_seq_len_tensor[0:1]  # (1,) tensor
+
+        # Create position_ids: [past_seq_len, past_seq_len+1, ..., past_seq_len+seq_len-1]
+        # Use broadcasting to add past_seq_len to arange
+        position_ids = torch.arange(0, seq_len, dtype=torch.long, device=input_ids.device).unsqueeze(0)
+        position_ids = position_ids + past_seq_len_scalar  # Broadcasting addition
+        position_ids = position_ids.expand(batch_size, -1)
+
+        # Call model with computed position_ids
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -131,7 +161,20 @@ def main():
 
     print(f"\n[3/6] Loading model ({'FP16' if use_fp16 else 'FP32'})...")
     dtype = torch.float16 if use_fp16 else torch.float32
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # Device selection for export
+    # Note: ONNX export only traces the graph - optimization happens at inference time
+    # GPU export is faster for large models but may have stability issues with nightly builds
+    force_cpu_export = os.environ.get('FORCE_CPU_EXPORT', 'false') == 'true'
+
+    if force_cpu_export:
+        device = "cpu"
+        print(f"    Using CPU for export (stable)")
+    else:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"    Using GPU for export (faster, uses ROCm)")
+        if device == "cuda":
+            print(f"    Note: If export fails, try FORCE_CPU_EXPORT=true")
 
     model = AutoModelForCausalLM.from_pretrained(
         model_path,
@@ -158,25 +201,29 @@ def main():
 
     # Create dummy inputs
     batch_size = 1
-    seq_len = 4  # Current input sequence length
-    past_seq_len = 8 if with_kv_cache else 0
-    total_seq_len = seq_len + past_seq_len
+    seq_len = 256  # Must be >= MIN_SEQ_LEN to satisfy Dim constraints
+    past_seq_len = 512 if with_kv_cache else 0
 
     dummy_input_ids = torch.randint(0, vocab_size, (batch_size, seq_len), device=device)
-    dummy_attention_mask = torch.ones((batch_size, total_seq_len), dtype=torch.int64, device=device)
-    # position_ids: tells model which positions we're computing (essential for KV cache!)
-    dummy_position_ids = torch.arange(past_seq_len, past_seq_len + seq_len, device=device).unsqueeze(0)
+    # Use seq_len for attention_mask to match dynamic_shapes (batch handling requires consistent dims)
+    dummy_attention_mask = torch.ones((batch_size, seq_len), dtype=torch.int64, device=device)
+    # past_seq_len as padded tensor (256 elements = 2048 bytes to avoid hipHostRegister failures)
+    # Only first element is used; rest is padding
+    dummy_past_seq_len = torch.zeros(256, dtype=torch.int64, device=device)
+    dummy_past_seq_len[0] = past_seq_len
 
     # Create KV cache inputs as a tuple
     past_kv_list = []
 
-    input_names = ["input_ids", "attention_mask", "position_ids"]
+    # Use past_seq_len as scalar input instead of position_ids array
+    # This avoids hipHostRegister failures on small buffers
+    input_names = ["input_ids", "attention_mask", "past_seq_len"]
     output_names = ["logits"]
 
     dynamic_axes = {
         "input_ids": {0: "batch_size", 1: "sequence_length"},
-        "attention_mask": {0: "batch_size", 1: "total_sequence_length"},
-        "position_ids": {0: "batch_size", 1: "sequence_length"},
+        "attention_mask": {0: "batch_size", 1: "sequence_length"},
+        # past_seq_len is a fixed-size padded tensor (256 elements) - no dynamic axes
         "logits": {0: "batch_size", 1: "sequence_length"},
     }
 
@@ -205,16 +252,16 @@ def main():
             dynamic_axes[present_value_name] = {0: "batch_size", 2: "total_sequence_length"}
 
     past_kv_tuple = tuple(past_kv_list) if past_kv_list else ()
-    dummy_inputs = (dummy_input_ids, dummy_attention_mask, dummy_position_ids, past_kv_tuple)
+    dummy_inputs = (dummy_input_ids, dummy_attention_mask, dummy_past_seq_len, past_kv_tuple)
 
     print(f"    Input tensors: {len(input_names)}")
     print(f"    Output tensors: {len(output_names)}")
-    print(f"    Position IDs: {dummy_position_ids.tolist()} (ensures KV for all positions)")
+    print(f"    past_seq_len (scalar): {past_seq_len} (position_ids computed internally)")
 
     # Verify wrapper works
     print(f"\n    Verifying wrapper forward pass...")
     with torch.no_grad():
-        test_output = wrapper(dummy_input_ids, dummy_attention_mask, dummy_position_ids, past_kv_tuple)
+        test_output = wrapper(dummy_input_ids, dummy_attention_mask, dummy_past_seq_len, past_kv_tuple)
         print(f"    ✓ Forward pass successful")
         print(f"    Logits shape: {test_output[0].shape}")
         if with_kv_cache:
@@ -234,10 +281,14 @@ def main():
     # Use dynamo=True for opset 21 with dynamic_shapes
     from torch.export import Dim
 
+    # CRITICAL: MIGraphX hipHostRegister bug - even 1024 bytes may fail
+    # HIP memory pool seems to have 2KB minimum allocation
+    # Testing with 256 elements = 2048 bytes
+    MIN_SEQ_LEN = 256  # Minimum sequence length to avoid hipHostRegister failure
+
     batch_dim = Dim("batch_size", min=1, max=64)
-    seq_dim = Dim("sequence_length", min=1, max=4096)
-    past_seq_dim = Dim("past_sequence_length", min=1, max=131072)
-    total_seq_dim = Dim("total_sequence_length", min=1, max=135168)
+    seq_dim = Dim("sequence_length", min=MIN_SEQ_LEN, max=4096)
+    past_seq_dim = Dim("past_sequence_length", min=0, max=131072)
 
     # Build dynamic_shapes matching input structure: (input_ids, attention_mask, position_ids, past_kv_tuple)
     kv_dynamic_shapes = []
@@ -246,26 +297,49 @@ def main():
             kv_dynamic_shapes.append({0: batch_dim, 2: past_seq_dim})  # key
             kv_dynamic_shapes.append({0: batch_dim, 2: past_seq_dim})  # value
 
+    # CRITICAL: All current sequence dimensions must use the same seq_dim
+    # past_seq_len is a scalar (no dynamic shape)
+    # position_ids is computed internally from past_seq_len to avoid hipHostRegister bug
     dynamic_shapes_tuple = (
         {0: batch_dim, 1: seq_dim},           # input_ids
-        {0: batch_dim, 1: total_seq_dim},     # attention_mask
-        {0: batch_dim, 1: seq_dim},           # position_ids (same dims as input_ids)
+        {0: batch_dim, 1: seq_dim},           # attention_mask (must match input_ids dim)
+        None,                                  # past_seq_len (scalar, no dynamic shape)
         tuple(kv_dynamic_shapes),             # past_kv_flat tuple
     )
 
-    torch.onnx.export(
-        wrapper,
-        dummy_inputs,
-        str(output_file),
-        input_names=input_names,
-        output_names=output_names,
-        opset_version=opset_version,
-        dynamo=True,
-        dynamic_shapes=dynamic_shapes_tuple,
-        external_data=True,
-        report=True,
-    )
-    print(f"    ✓ ONNX export complete (dynamo, opset {opset_version})")
+    # Export with dynamo=True (modern torch.export path)
+    # If this fails with nightly builds, try: dynamo=False with old export path
+    use_dynamo = os.environ.get('USE_DYNAMO', 'true') == 'true'
+
+    if use_dynamo:
+        print(f"    Using dynamo export (torch.export path, recommended)")
+        torch.onnx.export(
+            wrapper,
+            dummy_inputs,
+            str(output_file),
+            input_names=input_names,
+            output_names=output_names,
+            opset_version=opset_version,
+            dynamo=True,
+            dynamic_shapes=dynamic_shapes_tuple,
+            external_data=True,
+            report=True,
+        )
+        print(f"    ✓ ONNX export complete (dynamo, opset {opset_version})")
+    else:
+        print(f"    Using legacy export (fallback for nightly issues)")
+        torch.onnx.export(
+            wrapper,
+            dummy_inputs,
+            str(output_file),
+            input_names=input_names,
+            output_names=output_names,
+            opset_version=opset_version,
+            dynamic_axes=dynamic_axes,
+            do_constant_folding=False,
+            external_data=True,
+        )
+        print(f"    ✓ ONNX export complete (legacy, opset {opset_version})")
 
     # Verify ONNX model
     print(f"\n    Verifying ONNX model...")
@@ -313,8 +387,8 @@ def main():
         "output_names": output_names,
         "dynamic_dims": {
             "batch_size": "Variable batch size (1-64)",
-            "sequence_length": "Current input sequence length (1-4096)",
-            "past_sequence_length": "Previous tokens in KV cache (1-131072)",
+            "sequence_length": f"Current input sequence length ({MIN_SEQ_LEN}-4096, min=64 avoids MIGraphX hipHostRegister bug)",
+            "past_sequence_length": "Previous tokens in KV cache (0-131072)",
             "total_sequence_length": "past_sequence_length + sequence_length",
         },
         "kv_cache_info": {
@@ -345,8 +419,8 @@ def main():
         print(f"   KV shape: (batch, {num_kv_heads}, seq_len, {head_dim})")
     print(f"\n   Dynamic dimensions:")
     print(f"   - batch_size: 1-64")
-    print(f"   - sequence_length: 1-4096 (current input)")
-    print(f"   - past_sequence_length: 1-131072 (KV cache)")
+    print(f"   - sequence_length: {MIN_SEQ_LEN}-4096 (min={MIN_SEQ_LEN} avoids MIGraphX hipHostRegister bug)")
+    print(f"   - past_sequence_length: 0-131072 (KV cache)")
     print(f"{'='*60}")
 
 

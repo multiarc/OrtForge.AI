@@ -98,6 +98,11 @@ sess_options = ort.SessionOptions()
 sess_options.log_severity_level = 0 if verbose else log_level  # 0=VERBOSE
 sess_options.log_verbosity_level = 10 if verbose else 0
 
+# CRITICAL: Disable graph optimizations to avoid hipHostRegister issues
+# MIGraphX's optimization may be inserting problematic copy operations
+sess_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
+print("Graph optimizations: DISABLED (workaround for MIGraphX hipHostRegister bug)")
+
 # Enable profiling for detailed timing
 if verbose:
     sess_options.enable_profiling = True
@@ -107,15 +112,25 @@ if verbose:
 if provider == "MIGraphXExecutionProvider":
     cache_path = str(model_dir / "migraphx_cache")
 
+    # Define minimum sequence length to avoid hipHostRegister bug
+    MIN_SEQ_FOR_MIGRAPHX = 256  # 2048 bytes minimum
+
     # MIGraphX options MUST be strings, not booleans/integers
     # ALWAYS enable offload_copy to fix hipHostRegister failures on small buffers
     # (attention_mask at 4KB fails GPU registration without this)
+    # MIGraphX provider options - trying to work around hipHostRegister bug
     provider_options = {
         'device_id': '0',
         'migraphx_fp16_enable': '1' if migraphx_fp16 else '0',
-        'migraphx_exhaustive_tune': '1' if exhaustive else '0',
-        'migraphx_offload_copy': '1',  # Required for reliable inference
+        'migraphx_exhaustive_tune': '0',  # Disable exhaustive tuning
+        'migraphx_offload_copy': '1',  # Should handle small buffers
+        # Note: migraphx_enable_gpu is not a valid option, removed
     }
+
+    print(f"\nAttempting workaround for MIGraphX hipHostRegister bug...")
+    print(f"  - Graph optimizations disabled")
+    print(f"  - offload_copy enabled")
+    print(f"  - Testing with min buffer size: {MIN_SEQ_FOR_MIGRAPHX * 8} bytes")
 
     if not no_cache:
         os.makedirs(cache_path, exist_ok=True)
@@ -150,6 +165,9 @@ print("  (First run may take time for MIGraphX compilation)")
 start_load = time.time()
 
 try:
+    print(f"\nAttempting to create session with providers: {providers}")
+    print(f"Provider options: {provider_options_list}")
+
     session = ort.InferenceSession(
         str(model_file),
         sess_options,
@@ -164,6 +182,9 @@ except Exception as e:
     print(f"\n   For MIGraphX issues, try:")
     print(f"   1. Check GPU target matches: rocminfo | grep gfx")
     print(f"   2. Try CPU provider: ./09_run_inference_test.sh {model_dir} CPUExecutionProvider")
+    print(f"\n   Full error:")
+    import traceback
+    traceback.print_exc()
     raise
 
 # Verify which provider is actually being used
@@ -198,6 +219,20 @@ has_kv_cache = False
 num_layers = export_info.get('num_layers', 32)
 num_kv_heads = export_info.get('num_kv_heads', 8)
 head_dim = export_info.get('head_dim', 128)
+
+# Check for expected inputs
+expected_inputs = ['input_ids', 'attention_mask', 'past_seq_len']
+actual_input_names = [inp.name for inp in model_inputs]
+has_past_seq_len = 'past_seq_len' in actual_input_names
+has_position_ids = 'position_ids' in actual_input_names
+
+print(f"  Expected new signature (past_seq_len): {has_past_seq_len}")
+print(f"  Old signature (position_ids): {has_position_ids}")
+
+if not has_past_seq_len and has_position_ids:
+    print(f"\n⚠️  WARNING: Model still has old signature!")
+    print(f"  You need to RE-EXPORT the model with the updated export_model.py")
+    print(f"  Current model was exported before the past_seq_len changes.")
 
 for inp in model_inputs[:5]:
     shape_str = str(inp.shape)
@@ -342,12 +377,11 @@ def sample_token(logits, temperature=0.0):
 # ============================================================
 # AUTOREGRESSIVE GENERATION
 # ============================================================
-# FULLY STATIC shapes to avoid MIGraphX recompilation:
-# BENCHMARK-COMPATIBLE SHAPES (seq=1, kv=256, attn=257):
-# Only these shapes work due to MIGraphX/hipHostRegister constraints.
+# Use larger batch sizes for prefill to avoid reshape errors with MIGraphX.
+# After export fix: attention_mask must have same sequence dimension as input_ids.
+# We use a static shape for all operations to avoid recompilation.
 #
 # filled_kv tracks how many positions contain valid data (0 to KV_LEN).
-# attention_mask marks filled_kv positions + valid input tokens as 1.
 
 print(f"\nGenerating up to {max_tokens} tokens...")
 print("-" * 60)
@@ -355,24 +389,33 @@ print("-" * 60)
 generated_ids = input_ids[0].tolist()
 eos_token_id = tokenizer.eos_token_id
 
-# BENCHMARK-COMPATIBLE SHAPES (the ONLY shapes that work with hipHostRegister)
-# Any other shape triggers hipHostRegister failures in MIGraphX internal allocations.
-# These exact shapes: seq_len=1, kv_len=256, attn_len=257
+# Use a larger sequence length for both prefill and decode to avoid reshape errors
+# This allows batched prefill processing while maintaining consistent shapes
+# CRITICAL: MIGraphX hipHostRegister bug - HIP memory pool minimum is ~2KB
+# Using 256 elements (2048 bytes) to avoid the bug
+# Note: MIN_SEQ_FOR_MIGRAPHX is defined earlier if using MIGraphX
+if 'MIN_SEQ_FOR_MIGRAPHX' not in locals():
+    MIN_SEQ_FOR_MIGRAPHX = 256  # Default if not using MIGraphX
+PREFILL_SEQ_LEN = max(MIN_SEQ_FOR_MIGRAPHX, min(256, seq_length))
+DECODE_SEQ_LEN = PREFILL_SEQ_LEN       # Use same shape for decode (not optimal but avoids recompile)
+KV_LEN = seq_length                     # e.g., 256 - KV cache size
 
-SEQ_LEN = 1             # Must be 1 (benchmark shape)
-KV_LEN = seq_length     # e.g., 256 - KV cache size
-ATTN_LEN = KV_LEN + SEQ_LEN  # e.g., 257 - attention covers past + current
+print(f"Static shapes: prefill_seq={PREFILL_SEQ_LEN}, decode_seq={DECODE_SEQ_LEN}, kv={KV_LEN}")
+print(f"Note: decode uses same seq length as prefill to avoid MIGraphX recompilation")
 
-print(f"Benchmark-compatible shapes: seq_len={SEQ_LEN}, kv_len={KV_LEN}, attn_len={ATTN_LEN}")
+# Pre-allocate buffers with static shapes
+# For prefill: process multiple tokens at once
+# For decode: use same shape but only fill first position (inefficient but avoids recompile)
+# Note: position_ids is computed internally in ONNX graph from past_seq_len scalar
+prefill_input_ids = np.zeros((1, PREFILL_SEQ_LEN), dtype=np.int64)
+prefill_attention_mask = np.zeros((1, PREFILL_SEQ_LEN), dtype=np.int64)
 
-# Pre-allocate buffers with EXACT benchmark shapes
-input_ids_buffer = np.zeros((1, SEQ_LEN), dtype=np.int64)
-position_ids_buffer = np.zeros((1, SEQ_LEN), dtype=np.int64)
-attention_mask_buffer = np.zeros((1, ATTN_LEN), dtype=np.int64)
+decode_input_ids = np.zeros((1, DECODE_SEQ_LEN), dtype=np.int64)
+decode_attention_mask = np.zeros((1, DECODE_SEQ_LEN), dtype=np.int64)
 
-print(f"Buffers: input={input_ids_buffer.shape}, position={position_ids_buffer.shape}, attn={attention_mask_buffer.shape}")
+print(f"Buffers: prefill={prefill_input_ids.shape}, decode={decode_input_ids.shape}")
 
-# Fixed-size KV cache buffer (matches benchmark: kv_len=256)
+# Fixed-size KV cache buffer
 kv_cache = {}
 for layer_idx in range(num_layers):
     kv_cache[layer_idx] = {
@@ -391,98 +434,158 @@ decode_times = []
 new_token_ids = []
 prompt_tokens = generated_ids.copy()
 
-def run_single_token(token_id, position, kv_cache, filled_kv):
+def run_batch_prefill(tokens, start_position, kv_cache, filled_kv):
     """
-    Run inference for SINGLE TOKEN with benchmark-compatible shapes.
-
-    Uses shapes: seq_len=1, kv_len=256, attn_len=257
-    These are the ONLY shapes that work without hipHostRegister failures.
+    Run inference for a batch of tokens during prefill.
 
     Args:
-        token_id: Single token ID to process
-        position: Position index for this token
+        tokens: List of token IDs (up to PREFILL_SEQ_LEN)
+        start_position: Starting position index
         kv_cache: KV cache dict (will be updated)
         filled_kv: Current filled positions in KV cache
 
     Returns:
-        logits, kv_cache, new_filled_kv
+        logits (for last token), kv_cache, new_filled_kv
     """
-    # Fill buffers (single token)
-    input_ids_buffer[0, 0] = token_id
-    position_ids_buffer[0, 0] = position
+    batch_size = len(tokens)
+    assert batch_size <= PREFILL_SEQ_LEN, f"Batch {batch_size} exceeds {PREFILL_SEQ_LEN}"
 
-    # Attention mask: (1, ATTN_LEN) = (1, KV_LEN + 1)
-    # First KV_LEN positions are for past KV cache
-    # Last 1 position is for current token
-    attention_mask_buffer.fill(0)
-    attention_mask_buffer[0, :filled_kv] = 1  # Valid past KV positions
-    attention_mask_buffer[0, KV_LEN] = 1      # Current token
+    # Fill buffers
+    prefill_input_ids.fill(0)
+    prefill_attention_mask.fill(0)
+
+    for i, token_id in enumerate(tokens):
+        prefill_input_ids[0, i] = token_id
+        prefill_attention_mask[0, i] = 1  # Mark valid positions
+
+    # Create past_seq_len padded tensor (256 elements = 2048 bytes to avoid hipHostRegister failures)
+    # Only first element is used; rest is padding
+    past_seq_len_padded = np.zeros(256, dtype=np.int64)
+    past_seq_len_padded[0] = start_position
 
     # Build feed dict
-    feed_dict = {}
+    feed_dict = {
+        "input_ids": prefill_input_ids,
+        "attention_mask": prefill_attention_mask,
+        "past_seq_len": past_seq_len_padded,
+    }
+
     for inp in model_inputs:
-        if inp.name == "input_ids":
-            feed_dict[inp.name] = input_ids_buffer
-        elif inp.name == "attention_mask":
-            feed_dict[inp.name] = attention_mask_buffer
-        elif inp.name == "position_ids":
-            feed_dict[inp.name] = position_ids_buffer
-        elif "past_key_values" in inp.name:
+        if "past_key_values" in inp.name:
             layer_idx = int(inp.name.split('.')[1])
             if ".key" in inp.name:
                 feed_dict[inp.name] = kv_cache[layer_idx]['key']
             elif ".value" in inp.name:
                 feed_dict[inp.name] = kv_cache[layer_idx]['value']
 
-    # Debug first few calls
-    if filled_kv < 3:
-        print(f"\n  [DEBUG] token={token_id}, pos={position}, filled_kv={filled_kv}")
-        print(f"  [DEBUG] input: {input_ids_buffer.shape}, attn: {attention_mask_buffer.shape}, sum={attention_mask_buffer.sum()}")
-
     # Run inference
     outputs = session.run(None, feed_dict)
 
-    # Model outputs KV with shape (1, h, KV_LEN + 1, d)
-    # The new KV for this token is at position KV_LEN
+    # Extract and store KV cache updates
     output_idx = 1
-
-    if filled_kv < 3:
-        print(f"  [DEBUG] Output KV shape: {outputs[1].shape}")
-
     for layer_idx in range(num_layers):
         out_key = outputs[output_idx]
         out_value = outputs[output_idx + 1]
 
-        # Copy new KV from output position KV_LEN to buffer position filled_kv
+        # Copy new KV entries (only valid positions)
+        for i in range(batch_size):
+            if filled_kv + i < KV_LEN:
+                kv_cache[layer_idx]['key'][:, :, filled_kv + i, :] = out_key[:, :, i, :]
+                kv_cache[layer_idx]['value'][:, :, filled_kv + i, :] = out_value[:, :, i, :]
+
+        output_idx += 2
+
+    new_filled = min(filled_kv + batch_size, KV_LEN)
+
+    # Return logits for last token
+    logits = outputs[0]
+    return logits[0, batch_size - 1, :], kv_cache, new_filled
+
+
+def run_single_decode(token_id, position, kv_cache, filled_kv):
+    """
+    Run inference for single token during decode phase.
+    Uses same shape as prefill (DECODE_SEQ_LEN) but only fills first position.
+
+    Args:
+        token_id: Token ID to process
+        position: Position index
+        kv_cache: KV cache dict (will be updated)
+        filled_kv: Current filled positions in KV cache
+
+    Returns:
+        logits, kv_cache, new_filled_kv
+    """
+    # Fill buffers (only first position used)
+    decode_input_ids.fill(0)
+    decode_attention_mask.fill(0)
+
+    decode_input_ids[0, 0] = token_id
+    decode_attention_mask[0, 0] = 1  # Only current token is valid
+
+    # Create past_seq_len padded tensor (256 elements = 2048 bytes to avoid hipHostRegister failures)
+    # Only first element is used; rest is padding
+    past_seq_len_padded = np.zeros(256, dtype=np.int64)
+    past_seq_len_padded[0] = position
+
+    # Build feed dict
+    feed_dict = {
+        "input_ids": decode_input_ids,
+        "attention_mask": decode_attention_mask,
+        "past_seq_len": past_seq_len_padded,
+    }
+
+    for inp in model_inputs:
+        if "past_key_values" in inp.name:
+            layer_idx = int(inp.name.split('.')[1])
+            if ".key" in inp.name:
+                feed_dict[inp.name] = kv_cache[layer_idx]['key']
+            elif ".value" in inp.name:
+                feed_dict[inp.name] = kv_cache[layer_idx]['value']
+
+    # Run inference
+    outputs = session.run(None, feed_dict)
+
+    # Extract and store KV cache update
+    output_idx = 1
+    for layer_idx in range(num_layers):
+        out_key = outputs[output_idx]
+        out_value = outputs[output_idx + 1]
+
+        # Copy new KV entry (only first position is valid)
         if filled_kv < KV_LEN:
-            kv_cache[layer_idx]['key'][:, :, filled_kv, :] = out_key[:, :, KV_LEN, :]
-            kv_cache[layer_idx]['value'][:, :, filled_kv, :] = out_value[:, :, KV_LEN, :]
+            kv_cache[layer_idx]['key'][:, :, filled_kv, :] = out_key[:, :, 0, :]
+            kv_cache[layer_idx]['value'][:, :, filled_kv, :] = out_value[:, :, 0, :]
 
         output_idx += 2
 
     new_filled = min(filled_kv + 1, KV_LEN)
 
-    # Return logits for the single token
+    # Return logits for the token
     logits = outputs[0]
-    return logits[0, -1, :], kv_cache, new_filled
+    return logits[0, 0, :], kv_cache, new_filled
 
 
-# ========== PREFILL (ONE-BY-ONE) ==========
-# Must process tokens one at a time due to hipHostRegister constraints.
-# Only seq_len=1 shapes work reliably with MIGraphX.
+# ========== PREFILL (BATCHED) ==========
+# Process prompt in batches for faster prefill
 prefill_start = time.time()
 
 n_prompt = len(prompt_tokens)
-print(f"[Prefill: {n_prompt} tokens (one-by-one, required for MIGraphX compatibility)]")
+print(f"[Prefill: {n_prompt} tokens in batches of {PREFILL_SEQ_LEN}]")
 
-for i, token_id in enumerate(prompt_tokens):
-    logits, kv_cache, filled_kv = run_single_token(token_id, i, kv_cache, filled_kv)
-    if (i + 1) % 10 == 0 or i == n_prompt - 1:
-        print(f"  [Prefill: {i+1}/{n_prompt}, KV: {filled_kv}/{KV_LEN}]", end='\r')
+position = 0
+for i in range(0, n_prompt, PREFILL_SEQ_LEN):
+    batch_tokens = prompt_tokens[i:i + PREFILL_SEQ_LEN]
+    logits, kv_cache, filled_kv = run_batch_prefill(batch_tokens, position, kv_cache, filled_kv)
+    position += len(batch_tokens)
+
+    if (i + len(batch_tokens)) % (PREFILL_SEQ_LEN * 2) == 0 or i + len(batch_tokens) >= n_prompt:
+        print(f"  [Prefill: {i + len(batch_tokens)}/{n_prompt}, KV: {filled_kv}/{KV_LEN}]", end='\r')
 
 print()  # Newline
 prefill_time = time.time() - prefill_start
-print(f"[Prefill complete: {len(prompt_tokens)} tokens in {prefill_time*1000:.0f}ms]")
+print(f"[Prefill complete: {len(prompt_tokens)} tokens in {prefill_time*1000:.0f}ms")
+print(f" Throughput: {len(prompt_tokens)/prefill_time:.1f} tok/s]")
 print(f"[KV filled: {filled_kv}/{KV_LEN}]")
 print("\nASSISTANT:")
 print("-" * 60)
@@ -501,7 +604,7 @@ sys.stdout.flush()
 current_position = len(prompt_tokens)
 
 # ========== DECODE ==========
-# Each decode step processes one token (same shape as prefill)
+# Each decode step processes one token (uses same shape as prefill for consistency)
 for step in range(max_tokens - 1):  # -1 because we already generated 1
     # Check stopping conditions
     if next_token_id == eos_token_id:
@@ -516,8 +619,8 @@ for step in range(max_tokens - 1):  # -1 because we already generated 1
 
     step_start = time.time()
 
-    # Process single token
-    logits, kv_cache, filled_kv = run_single_token(
+    # Process single token (uses DECODE_SEQ_LEN shape)
+    logits, kv_cache, filled_kv = run_single_decode(
         next_token_id, current_position, kv_cache, filled_kv
     )
 
@@ -561,7 +664,7 @@ print("PERFORMANCE SUMMARY")
 print(f"{'='*60}")
 print(f"Provider:           {actual_providers[0]}")
 print(f"Model type:         {model_type}")
-print(f"Static shapes:      seq={SEQ_LEN}, kv={KV_LEN}, attn={ATTN_LEN} (benchmark-compatible)")
+print(f"Shapes:             prefill_seq={PREFILL_SEQ_LEN}, decode_seq={DECODE_SEQ_LEN}, kv={KV_LEN}")
 print(f"KV filled:          {filled_kv}/{KV_LEN}")
 print(f"Prompt tokens:      {raw_prompt_len}")
 print(f"Generated tokens:   {generated_tokens}")
