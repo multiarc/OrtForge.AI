@@ -158,6 +158,11 @@ else:
     providers = [provider]
     provider_options_list = [{}]
 
+# Check if we should use IOBinding to avoid hipHostRegister
+use_io_binding = provider == "MIGraphXExecutionProvider"
+if use_io_binding:
+    print("\nUsing IOBinding to pre-allocate inputs on GPU (avoids hipHostRegister)")
+
 # Create session
 print(f"\nCreating session with {provider}...")
 print("  (First run may take time for MIGraphX compilation)")
