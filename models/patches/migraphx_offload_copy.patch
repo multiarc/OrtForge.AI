@@ -1,0 +1,153 @@
+diff --git a/onnxruntime/core/providers/migraphx/migraphx_execution_provider.cc b/onnxruntime/core/providers/migraphx/migraphx_execution_provider.cc
+index abc1234..def5678 100644
+--- a/onnxruntime/core/providers/migraphx/migraphx_execution_provider.cc
++++ b/onnxruntime/core/providers/migraphx/migraphx_execution_provider.cc
+@@ -165,6 +165,7 @@ MIGraphXExecutionProvider::MIGraphXExecutionProvider(const MIGraphXExecutionProv
+   }
+ 
+   GET_ENV_BOOL(migraphx_env_vars::kFP16Enable, fp16_enable_);
++  GET_ENV_BOOL(migraphx_env_vars::kOffloadCopy, offload_copy_);
+ 
+   GET_ENV_BOOL(migraphx_env_vars::kBF16Enable, bf16_enable_);
+ 
+@@ -1246,12 +1247,15 @@ void calibrate_and_quantize(migraphx::program& prog,
+ 
+ void compile_program(migraphx::program& prog,
+                      const migraphx::target& t,
+-                     bool exhaustive_tune) {
++                     bool exhaustive_tune,
++                     bool offload_copy) {
+   LOGS_DEFAULT(WARNING) << "Model Compile: Begin";
++  LOGS_DEFAULT(WARNING) << "  offload_copy: " << (offload_copy ? "true" : "false");
+   migraphx::compile_options co;
+   co.set_fast_math(false);
+   co.set_exhaustive_tune_flag(exhaustive_tune);
++  co.set_offload_copy(offload_copy);
+   prog.compile(t, co);
+   LOGS_DEFAULT(WARNING) << "Model Compile: Complete";
+ }
+@@ -1354,7 +1358,7 @@ Status MIGraphXExecutionProvider::Compile(const std::vector<FusedNodeAndGraph>&
+ 
+         calibrate_and_quantize(prog, t_, quant_params, fp16_enable_, bf16_enable_, int8_enable_,
+                                fp8_enable_, int8_calibration_cache_available_, dynamic_range_map_);
+-        compile_program(prog, t_, exhaustive_tune_);
++        compile_program(prog, t_, exhaustive_tune_, offload_copy_);
+         save_compiled_model(prog, model_cache_file);
+       }
+ 
+@@ -1497,7 +1501,7 @@ Status MIGraphXExecutionProvider::Compile(const std::vector<FusedNodeAndGraph>&
+           }
+           calibrate_and_quantize(prog, t, quant_params, fp16_enable, bf16_enable, int8_enable,
+                                  fp8_enable, int8_calibration_cache_available, map_dynamic_range);
+-          compile_program(prog, t, exhaustive_tune_);
++          compile_program(prog, t, exhaustive_tune_, offload_copy_);
+           save_compiled_model(prog, model_cache_file);
+         }
+ 
+diff --git a/onnxruntime/core/providers/migraphx/migraphx_execution_provider.h b/onnxruntime/core/providers/migraphx/migraphx_execution_provider.h
+index abc1234..def5678 100644
+--- a/onnxruntime/core/providers/migraphx/migraphx_execution_provider.h
++++ b/onnxruntime/core/providers/migraphx/migraphx_execution_provider.h
+@@ -32,6 +32,7 @@ constexpr auto kCachePath = "ORT_MIGRAPHX_CACHE_PATH"sv;
+ constexpr auto kINT8UseNativeMIGraphXCalibrationTable = "ORT_MIGRAPHX_INT8_USE_NATIVE_CALIBRATION_TABLE"sv;
+ constexpr auto kExhaustiveTune = "ORT_MIGRAPHX_EXHAUSTIVE_TUNE"sv;
+ constexpr auto kModelCachePath = "ORT_MIGRAPHX_MODEL_CACHE_PATH"sv;
++constexpr auto kOffloadCopy = "ORT_MIGRAPHX_OFFLOAD_COPY"sv;
+ }  // namespace migraphx_env_vars
+ 
+ // Information to construct kernel function state.
+@@ -56,6 +57,7 @@ struct MIGraphXFuncState {
+   std::filesystem::path model_cache_dir;
+   bool dump_model_ops = false;
+   bool exhaustive_tune = false;
++  bool offload_copy = false;
+ };
+ 
+ // Logical device representation.
+@@ -99,6 +101,7 @@ class MIGraphXExecutionProvider : public IExecutionProvider {
+         {std::string{migraphx_provider_option::kInt8CalibTable}, MakeStringWithClassicLocale(int8_calibration_table_name_)},
+         {std::string{migraphx_provider_option::kInt8UseNativeCalibTable}, MakeStringWithClassicLocale(int8_use_native_calibration_table_)},
+         {std::string{migraphx_provider_option::kExhaustiveTune}, MakeStringWithClassicLocale(exhaustive_tune_)},
++        {std::string{migraphx_provider_option::kOffloadCopy}, MakeStringWithClassicLocale(offload_copy_)},
+         {std::string{migraphx_provider_option::kMemLimit}, MakeStringWithClassicLocale(mem_limit_)},
+         {std::string{migraphx_provider_option::kArenaExtendStrategy}, EnumToName(arena_extend_strategy_mapping, arena_extend_strategy_)},
+         {std::string{migraphx_provider_option::kGpuExternalAlloc}, MakeStringWithClassicLocale(external_alloc_)},
+@@ -125,6 +128,7 @@ class MIGraphXExecutionProvider : public IExecutionProvider {
+   hipStream_t stream_ = nullptr;
+   hipDeviceProp_t device_prop_{};
+   bool exhaustive_tune_ = false;
++  bool offload_copy_ = false;
+   mutable std::filesystem::path model_path_{};
+   size_t mem_limit_{std::numeric_limits<size_t>::max()};
+   ArenaExtendStrategy arena_extend_strategy_{ArenaExtendStrategy::kNextPowerOfTwo};
+diff --git a/onnxruntime/core/providers/migraphx/migraphx_execution_provider_info.h b/onnxruntime/core/providers/migraphx/migraphx_execution_provider_info.h
+index abc1234..def5678 100644
+--- a/onnxruntime/core/providers/migraphx/migraphx_execution_provider_info.h
++++ b/onnxruntime/core/providers/migraphx/migraphx_execution_provider_info.h
+@@ -34,6 +34,7 @@ constexpr auto kGpuExternalAlloc = "migraphx_external_alloc"sv;
+ constexpr auto kGpuExternalFree = "migraphx_external_free"sv;
+ constexpr auto kGpuExternalEmptyCache = "migraphx_external_empty_cache"sv;
+ constexpr auto kModelCacheDir = "migraphx_model_cache_dir"sv;
++constexpr auto kOffloadCopy = "migraphx_offload_copy"sv;
+ }  // namespace migraphx_provider_option
+ 
+ extern const EnumNameMapping<ArenaExtendStrategy> arena_extend_strategy_mapping;
+@@ -50,6 +51,7 @@ struct MIGraphXExecutionProviderInfo {
+   std::string int8_calibration_table_name{};
+   bool int8_use_native_calibration_table{false};
+   std::filesystem::path model_cache_dir{};
++  bool offload_copy{false};
+   bool exhaustive_tune{false};
+ 
+   size_t mem_limit{std::numeric_limits<size_t>::max()};
+@@ -85,7 +87,8 @@ struct std::hash<::onnxruntime::MIGraphXExecutionProviderInfo> {
+                   (static_cast<size_t>(info.fp16_enable) << 18) ^
+                   (static_cast<size_t>(info.int8_enable) << 19) ^
+                   (static_cast<size_t>(info.int8_use_native_calibration_table) << 20) ^
+-                  (static_cast<size_t>(info.exhaustive_tune) << 21) ^
++                  (static_cast<size_t>(info.exhaustive_tune) << 21) ^
++                  (static_cast<size_t>(info.offload_copy) << 23) ^
+                   (static_cast<size_t>(info.bf16_enable) << 22);
+ 
+     onnxruntime::HashCombine(data, value);
+diff --git a/onnxruntime/core/providers/migraphx/migraphx_execution_provider_info.cc b/onnxruntime/core/providers/migraphx/migraphx_execution_provider_info.cc
+index abc1234..def5678 100644
+--- a/onnxruntime/core/providers/migraphx/migraphx_execution_provider_info.cc
++++ b/onnxruntime/core/providers/migraphx/migraphx_execution_provider_info.cc
+@@ -70,6 +70,7 @@ MIGraphXExecutionProviderInfo::MIGraphXExecutionProviderInfo(const ProviderOptio
+           .AddAssignmentToReference(migraphx_provider_option::kInt8CalibTable, int8_calibration_table_name)
+           .AddAssignmentToReference(migraphx_provider_option::kExhaustiveTune, exhaustive_tune)
+           .AddAssignmentToReference(migraphx_provider_option::kMemLimit, mem_limit)
++          .AddAssignmentToReference(migraphx_provider_option::kOffloadCopy, offload_copy)
+           .AddAssignmentToEnumReference(migraphx_provider_option::kArenaExtendStrategy, arena_extend_strategy_mapping, arena_extend_strategy)
+           .Parse(options));
+ }
+@@ -81,6 +82,7 @@ MIGraphXExecutionProviderInfo::MIGraphXExecutionProviderInfo(const OrtMIGraphXPr
+       fp8_enable{options.migraphx_fp8_enable != 0},
+       int8_enable{options.migraphx_int8_enable != 0},
+       exhaustive_tune{options.migraphx_exhaustive_tune != 0},
++      offload_copy{options.migraphx_offload_copy != 0},
+       mem_limit{options.migraphx_mem_limit},
+       arena_extend_strategy{options.migraphx_arena_extend_strategy} {
+ }
+@@ -98,6 +100,7 @@ ProviderOptions MIGraphXExecutionProviderInfo::ToProviderOptions() const {
+       {std::string{migraphx_provider_option::kMemLimit}, MakeStringWithClassicLocale(mem_limit)},
+       {std::string{migraphx_provider_option::kArenaExtendStrategy}, EnumToName(arena_extend_strategy_mapping, arena_extend_strategy)},
+       {std::string{migraphx_provider_option::kExhaustiveTune}, MakeStringWithClassicLocale(exhaustive_tune)},
++      {std::string{migraphx_provider_option::kOffloadCopy}, MakeStringWithClassicLocale(offload_copy)},
+       {std::string{migraphx_provider_option::kGpuExternalAlloc}, MakeStringWithClassicLocale(external_alloc)},
+       {std::string{migraphx_provider_option::kGpuExternalFree}, MakeStringWithClassicLocale(external_free)},
+       {std::string{migraphx_provider_option::kGpuExternalEmptyCache}, MakeStringWithClassicLocale(external_empty_cache)},
+diff --git a/include/onnxruntime/core/session/onnxruntime_c_api.h b/include/onnxruntime/core/session/onnxruntime_c_api.h
+index abc1234..def5678 100644
+--- a/include/onnxruntime/core/session/onnxruntime_c_api.h
++++ b/include/onnxruntime/core/session/onnxruntime_c_api.h
+@@ -xxx,6 +xxx,7 @@ typedef struct OrtMIGraphXProviderOptions {
+   int migraphx_fp8_enable;
+   int migraphx_int8_enable;
+   int migraphx_exhaustive_tune;
++  int migraphx_offload_copy;             // Enable offload copy (use CPU memory during compilation)
+   const char* migraphx_int8_calibration_table_name;
+   int migraphx_int8_use_native_calibration_table;
+   size_t migraphx_mem_limit;
+

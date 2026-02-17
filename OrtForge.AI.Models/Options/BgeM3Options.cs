@@ -1,5 +1,5 @@
 using Microsoft.ML.OnnxRuntime.Tensors;
-using OrtForge.AI.Models.Astractions;
+using OrtForge.AI.Models.Abstractions;
 
 namespace OrtForge.AI.Models.Options;
 

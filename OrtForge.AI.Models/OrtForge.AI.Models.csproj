@@ -7,7 +7,7 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <ProjectReference Include="..\OrtForge.AI.Models.Astractions\OrtForge.AI.Models.Astractions.csproj" />
+      <ProjectReference Include="..\OrtForge.AI.Models.Abstractions\OrtForge.AI.Models.Abstractions.csproj" />
     </ItemGroup>
 
 </Project>

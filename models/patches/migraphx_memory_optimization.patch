@@ -1,0 +1,239 @@
+diff --git a/onnxruntime/core/providers/migraphx/migraphx_execution_provider.cc b/onnxruntime/core/providers/migraphx/migraphx_execution_provider.cc
+index a59347841b..c93eff8a1d 100644
+--- a/onnxruntime/core/providers/migraphx/migraphx_execution_provider.cc
++++ b/onnxruntime/core/providers/migraphx/migraphx_execution_provider.cc
+@@ -151,6 +151,7 @@ MIGraphXExecutionProvider::MIGraphXExecutionProvider(const MIGraphXExecutionProv
+       model_cache_path_{info.model_cache_dir},
+       t_{info.target_device.c_str()},
+       exhaustive_tune_{info.exhaustive_tune},
++      offload_copy_{info.offload_copy},
+       metadef_id_generator_{ModelMetadefIdGenerator::Create()},
+       external_alloc_{info.external_alloc},
+       external_free_{info.external_free},
+@@ -179,6 +180,7 @@ MIGraphXExecutionProvider::MIGraphXExecutionProvider(const MIGraphXExecutionProv
+   GET_ENV_STRING(migraphx_env_vars::kModelCachePath, model_cache_path_);
+   GET_ENV_BOOL(migraphx_env_vars::kDumpModelOps, dump_model_ops_);
+   GET_ENV_BOOL(migraphx_env_vars::kExhaustiveTune, exhaustive_tune_);
++  GET_ENV_BOOL(migraphx_env_vars::kOffloadCopy, offload_copy_);
+ 
+   // Verify configuration correctness and adjust accordingly.
+ 
+@@ -714,10 +716,20 @@ std::unique_ptr<IndexedSubGraph> MIGraphXExecutionProvider::GetSubGraph(const st
+   int input_order = 0;
+   int output_order = 0;
+ 
++  // Collect initializers separately - MIGraphX embeds them as constants in the compiled model
++  // so ORT doesn't need to allocate VRAM for them
++  std::vector<std::string> initializers;
++
+   for (const auto& index : graph_nodes_index) {
+     sub_graph->Nodes().push_back(index);
+     const auto& node = graph.GetNode(index);
+     for (const auto& input : node->InputDefs()) {
++      // Check if this input is an initializer (weight/constant)
++      // If so, add to initializers list and skip fused_inputs
++      if (graph.IsConstantInitializer(input->Name(), true)) {
++        initializers.push_back(input->Name());
++        continue;
++      }
+       const auto& it = fused_outputs.find(input);
+       if (it != fused_outputs.end()) {
+         fused_outputs.erase(it);
+@@ -729,6 +741,11 @@ std::unique_ptr<IndexedSubGraph> MIGraphXExecutionProvider::GetSubGraph(const st
+     }
+ 
+     for (const auto& input : node->ImplicitInputDefs()) {
++      // Check if this input is an initializer (weight/constant)
++      if (graph.IsConstantInitializer(input->Name(), true)) {
++        initializers.push_back(input->Name());
++        continue;
++      }
+       const auto& it = fused_outputs.find(input);
+       if (it != fused_outputs.end()) {
+         fused_outputs.erase(it);
+@@ -835,6 +852,12 @@ std::unique_ptr<IndexedSubGraph> MIGraphXExecutionProvider::GetSubGraph(const st
+     }
+   }
+ 
++  // Mark initializers as constant - tells ORT not to allocate VRAM for them
++  // MIGraphX will embed these weights into the compiled model
++  for (const auto& initializer : initializers) {
++    meta_def->constant_initializers().push_back(initializer);
++  }
++
+   for (const auto& output : output_names) {
+     meta_def->outputs().push_back(output);
+   }
+@@ -1248,13 +1271,13 @@ void calibrate_and_quantize(migraphx::program& prog,
+ 
+ void compile_program(migraphx::program& prog,
+                      const migraphx::target& t,
+-                     bool exhaustive_tune) {
+-  LOGS_DEFAULT(WARNING) << "Model Compile: Begin";
++                     bool exhaustive_tune,
++                     bool offload_copy = false) {
+   migraphx::compile_options co;
+   co.set_fast_math(false);
+   co.set_exhaustive_tune_flag(exhaustive_tune);
++  co.set_offload_copy(offload_copy);
+   prog.compile(t, co);
+-  LOGS_DEFAULT(WARNING) << "Model Compile: Complete";
+ }
+ 
+ std::string to_hex(const uint64_t v) {
+@@ -1320,6 +1343,7 @@ Status MIGraphXExecutionProvider::Compile(const std::vector<FusedNodeAndGraph>&
+       input_name_index[input_defs[i]->Name()] = i;
+     }
+ 
++    // Create ONNX buffer from the fused subgraph
+     auto model = graph_body_viewer.CreateModel(*GetLogger());
+     auto model_proto = model->ToProto();
+     graph_body_viewer.ToProto(*model_proto->mutable_graph(), true, true);
+@@ -1343,7 +1367,7 @@ Status MIGraphXExecutionProvider::Compile(const std::vector<FusedNodeAndGraph>&
+ 
+     if (!no_input_shape) {
+       if (!load_precompiled_model(prog, model_cache_file)) {
+-        LOGS_DEFAULT(VERBOSE) << "No input shapes detected quantizing model";
++        LOGS_DEFAULT(WARNING) << "MIGraphX: No cache found, compiling model (this may take a while)";
+ #ifndef ENABLE_TRAINING_CORE
+ #ifdef HAVE_MIGRAPHX_API_ONNX_OPTIONS_SET_EXTERNAL_DATA_PATH
+         options.set_external_data_path(model_path_.parent_path().string());
+@@ -1354,8 +1378,10 @@ Status MIGraphXExecutionProvider::Compile(const std::vector<FusedNodeAndGraph>&
+ 
+         calibrate_and_quantize(prog, t_, quant_params, fp16_enable_, bf16_enable_, int8_enable_,
+                                fp8_enable_, int8_calibration_cache_available_, dynamic_range_map_);
+-        compile_program(prog, t_, exhaustive_tune_);
++        compile_program(prog, t_, exhaustive_tune_, offload_copy_);
+         save_compiled_model(prog, model_cache_file);
++      } else {
++        LOGS_DEFAULT(WARNING) << "MIGraphX: Loaded compiled model from cache";
+       }
+ 
+       auto prog_output_shapes = prog.get_output_shapes();
+@@ -1365,10 +1391,9 @@ Status MIGraphXExecutionProvider::Compile(const std::vector<FusedNodeAndGraph>&
+       }
+     }
+ 
+-    // compile the program
++    // Store compiled program and ONNX buffer (needed for dynamic shape recompilation)
+     map_progs_[fused_node.Name()] = prog;
+-
+-    map_onnx_string_[fused_node.Name()] = onnx_string_buffer;
++    map_onnx_string_[fused_node.Name()] = std::move(onnx_string_buffer);
+     map_input_index_[fused_node.Name()] = input_name_index;
+     map_no_input_shape_[fused_node.Name()] = no_input_shape;
+     NodeComputeInfo compute_info;
+@@ -1428,6 +1453,26 @@ Status MIGraphXExecutionProvider::Compile(const std::vector<FusedNodeAndGraph>&
+         param_shapes = prog.get_parameter_shapes();
+         auto prog_output_shapes = prog.get_output_shapes();
+ 
++        // Diagnostic: Compare what MIGraphX needs vs what ORT provides
++        // This helps identify if we can skip allocating weight tensors
++        size_t mgx_runtime_inputs = 0;
++        size_t mgx_outputs = 0;
++        size_t mgx_missing = 0;
++        for (auto&& name : param_shapes.names()) {
++          std::string name_str(name);
++          if (name_str.find("#output_") != std::string::npos) {
++            mgx_outputs++;
++          } else if (map_input_name_index.count(name_str) > 0) {
++            mgx_runtime_inputs++;
++          } else {
++            mgx_missing++;
++            LOGS_DEFAULT(WARNING) << "MIGraphX param not in ORT inputs: " << name_str;
++          }
++        }
++        LOGS_DEFAULT(WARNING) << "MIGraphX runtime: " << mgx_runtime_inputs << " inputs, "
++                              << mgx_outputs << " outputs, " << mgx_missing << " missing. "
++                              << "ORT provides: " << map_input_name_index.size() << " inputs";
++
+         // check whether input shapes match with shapes of program inputs
+         // migraphx::onnx_options cmp_options;
+         if (param_shapes.size() > 0) {
+@@ -1497,7 +1542,7 @@ Status MIGraphXExecutionProvider::Compile(const std::vector<FusedNodeAndGraph>&
+           }
+           calibrate_and_quantize(prog, t, quant_params, fp16_enable, bf16_enable, int8_enable,
+                                  fp8_enable, int8_calibration_cache_available, map_dynamic_range);
+-          compile_program(prog, t, exhaustive_tune_);
++          compile_program(prog, t, exhaustive_tune_, offload_copy_);
+           save_compiled_model(prog, model_cache_file);
+         }
+ 
+diff --git a/onnxruntime/core/providers/migraphx/migraphx_execution_provider.h b/onnxruntime/core/providers/migraphx/migraphx_execution_provider.h
+index 99f790b9f9..eafdcbf8c4 100644
+--- a/onnxruntime/core/providers/migraphx/migraphx_execution_provider.h
++++ b/onnxruntime/core/providers/migraphx/migraphx_execution_provider.h
+@@ -33,6 +33,7 @@ constexpr auto kCachePath = "ORT_MIGRAPHX_CACHE_PATH"sv;
+ constexpr auto kINT8UseNativeMIGraphXCalibrationTable = "ORT_MIGRAPHX_INT8_USE_NATIVE_CALIBRATION_TABLE"sv;
+ constexpr auto kExhaustiveTune = "ORT_MIGRAPHX_EXHAUSTIVE_TUNE"sv;
+ constexpr auto kModelCachePath = "ORT_MIGRAPHX_MODEL_CACHE_PATH"sv;
++constexpr auto kOffloadCopy = "ORT_MIGRAPHX_OFFLOAD_COPY"sv;
+ }  // namespace migraphx_env_vars
+ 
+ // Information to construct kernel function state.
+@@ -98,6 +99,7 @@ class MIGraphXExecutionProvider : public IExecutionProvider {
+         {std::string{migraphx_provider_option::kInt8CalibTable}, MakeStringWithClassicLocale(int8_calibration_table_name_)},
+         {std::string{migraphx_provider_option::kInt8UseNativeCalibTable}, MakeStringWithClassicLocale(int8_use_native_calibration_table_)},
+         {std::string{migraphx_provider_option::kExhaustiveTune}, MakeStringWithClassicLocale(exhaustive_tune_)},
++        {std::string{migraphx_provider_option::kOffloadCopy}, MakeStringWithClassicLocale(offload_copy_)},
+         {std::string{migraphx_provider_option::kMemLimit}, MakeStringWithClassicLocale(mem_limit_)},
+         {std::string{migraphx_provider_option::kArenaExtendStrategy}, EnumToName(arena_extend_strategy_mapping, arena_extend_strategy_)},
+         {std::string{migraphx_provider_option::kGpuExternalAlloc}, MakeStringWithClassicLocale(external_alloc_)},
+@@ -125,6 +127,7 @@ class MIGraphXExecutionProvider : public IExecutionProvider {
+   hipStream_t stream_ = nullptr;
+   hipDeviceProp_t device_prop_{};
+   bool exhaustive_tune_ = false;
++  bool offload_copy_ = false;
+   mutable std::filesystem::path model_path_{};
+   size_t mem_limit_{std::numeric_limits<size_t>::max()};
+   ArenaExtendStrategy arena_extend_strategy_{ArenaExtendStrategy::kNextPowerOfTwo};
+diff --git a/onnxruntime/core/providers/migraphx/migraphx_execution_provider_info.cc b/onnxruntime/core/providers/migraphx/migraphx_execution_provider_info.cc
+index 33ef366eb1..e3b2e9056c 100644
+--- a/onnxruntime/core/providers/migraphx/migraphx_execution_provider_info.cc
++++ b/onnxruntime/core/providers/migraphx/migraphx_execution_provider_info.cc
+@@ -70,6 +70,7 @@ MIGraphXExecutionProviderInfo::MIGraphXExecutionProviderInfo(const ProviderOptio
+           .AddAssignmentToReference(migraphx_provider_option::kInt8UseNativeCalibTable, int8_use_native_calibration_table)
+           .AddAssignmentToReference(migraphx_provider_option::kInt8CalibTable, int8_calibration_table_name)
+           .AddAssignmentToReference(migraphx_provider_option::kExhaustiveTune, exhaustive_tune)
++          .AddAssignmentToReference(migraphx_provider_option::kOffloadCopy, offload_copy)
+           .AddAssignmentToReference(migraphx_provider_option::kMemLimit, mem_limit)
+           .AddAssignmentToEnumReference(migraphx_provider_option::kArenaExtendStrategy, arena_extend_strategy_mapping, arena_extend_strategy)
+           .Parse(options));
+@@ -97,6 +98,7 @@ ProviderOptions MIGraphXExecutionProviderInfo::ToProviderOptions() const {
+       {std::string{migraphx_provider_option::kMemLimit}, MakeStringWithClassicLocale(mem_limit)},
+       {std::string{migraphx_provider_option::kArenaExtendStrategy}, EnumToName(arena_extend_strategy_mapping, arena_extend_strategy)},
+       {std::string{migraphx_provider_option::kExhaustiveTune}, MakeStringWithClassicLocale(exhaustive_tune)},
++      {std::string{migraphx_provider_option::kOffloadCopy}, MakeStringWithClassicLocale(offload_copy)},
+       {std::string{migraphx_provider_option::kGpuExternalAlloc}, MakeStringWithClassicLocale(external_alloc)},
+       {std::string{migraphx_provider_option::kGpuExternalFree}, MakeStringWithClassicLocale(external_free)},
+       {std::string{migraphx_provider_option::kGpuExternalEmptyCache}, MakeStringWithClassicLocale(external_empty_cache)},
+diff --git a/onnxruntime/core/providers/migraphx/migraphx_execution_provider_info.h b/onnxruntime/core/providers/migraphx/migraphx_execution_provider_info.h
+index 414254aaa2..cee458aa2f 100644
+--- a/onnxruntime/core/providers/migraphx/migraphx_execution_provider_info.h
++++ b/onnxruntime/core/providers/migraphx/migraphx_execution_provider_info.h
+@@ -34,6 +34,7 @@ constexpr auto kGpuExternalAlloc = "migraphx_external_alloc"sv;
+ constexpr auto kGpuExternalFree = "migraphx_external_free"sv;
+ constexpr auto kGpuExternalEmptyCache = "migraphx_external_empty_cache"sv;
+ constexpr auto kModelCacheDir = "migraphx_model_cache_dir"sv;
++constexpr auto kOffloadCopy = "migraphx_offload_copy"sv;
+ }  // namespace migraphx_provider_option
+ 
+ extern const EnumNameMapping<ArenaExtendStrategy> arena_extend_strategy_mapping;
+@@ -50,6 +51,7 @@ struct MIGraphXExecutionProviderInfo {
+   bool int8_use_native_calibration_table{false};
+   std::filesystem::path model_cache_dir{};
+   bool exhaustive_tune{false};
++  bool offload_copy{false};
+ 
+   size_t mem_limit{std::numeric_limits<size_t>::max()};
+   ArenaExtendStrategy arena_extend_strategy{ArenaExtendStrategy::kNextPowerOfTwo};
+@@ -85,7 +87,8 @@ struct std::hash<::onnxruntime::MIGraphXExecutionProviderInfo> {
+                   (static_cast<size_t>(info.int8_enable) << 19) ^
+                   (static_cast<size_t>(info.int8_use_native_calibration_table) << 20) ^
+                   (static_cast<size_t>(info.exhaustive_tune) << 21) ^
+-                  (static_cast<size_t>(info.bf16_enable) << 22);
++                  (static_cast<size_t>(info.bf16_enable) << 22) ^
++                  (static_cast<size_t>(info.offload_copy) << 23);
+ 
+     onnxruntime::HashCombine(data, value);
+ 

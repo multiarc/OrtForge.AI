@@ -41,13 +41,14 @@ Considering the above, choose your targets from the beginning. I recommend build
 Clone repo
 ```bash
 git clone --recursive https://github.com/ROCm/onnxruntime.git
-git checkout tags/v1.22.1
 cd onnxruntime
+git checkout tags/v1.22.1
 ```
 
 Build for .NET only to run models
 ```bash
-./build.sh --update --build --config Release --build_nuget --parallel --use_rocm --rocm_home /opt/rocm --skip_tests
+./build.sh --update --config Release --build_nuget --parallel --use_migraphx --migraphx_home /opt/rocm --skip_tests
+./build.sh --build --config Release --build_nuget --parallel --use_migraphx --migraphx_home /opt/rocm --skip_tests
 ```
 
 Build for .NET and for Python stack with PyTorch and any other toolset that may utilize GPU accelerators on AMD 
@@ -58,7 +59,8 @@ source ./bin/activate
 pip install 'cmake>=3.28,<4'
 pip install -r requirements.txt
 pip install setuptools
-./build.sh --update --build --config Release --build_wheel --build_nuget --parallel --use_rocm --rocm_home /opt/rocm --skip_tests
+./build.sh --update --config Release --build_wheel --build_nuget --parallel --use_migraphx --migraphx_home /opt/rocm --skip_tests
+./build.sh --build --config Release --build_wheel --build_nuget --parallel --use_migraphx --migraphx_home /opt/rocm --skip_tests
 ```
 
 Install wheel for python to use in the venv

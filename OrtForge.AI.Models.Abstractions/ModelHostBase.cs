@@ -2,9 +2,9 @@ using System.Runtime.InteropServices;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 using Microsoft.ML.Tokenizers;
-using OrtForge.AI.Models.Astractions.Extensions;
+using OrtForge.AI.Models.Abstractions.Extensions;
 
-namespace OrtForge.AI.Models.Astractions;
+namespace OrtForge.AI.Models.Abstractions;
 
 public abstract class ModelHostBase : IDisposable
 {
